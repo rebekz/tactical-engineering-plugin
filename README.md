@@ -1,6 +1,6 @@
-# IndyDevDan's Planning & Team Execution Workflow
+# Tactical Engineering
 
-This project implements IndyDevDan's approach to planning and executing with AI agents using Claude Code, combined with the Compound Engineering workflow from Every.
+This project implements an approach to planning and executing with AI agents using Claude Code, combined with the Compound Engineering workflow from Every.
 
 ## Overview
 
