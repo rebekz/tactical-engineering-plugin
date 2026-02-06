@@ -45,6 +45,7 @@ tactical-engineering-plugin/
 │   └── plugin.json        # Plugin manifest
 ├── commands/              # Slash commands
 │   ├── build.md           # /build - Execute plans with multi-agent coordination
+│   ├── party.md           # /party - Full-lifecycle multi-agent product team
 │   ├── compound.md        # /compound - Extract and document learnings
 │   ├── plan-w-team.md     # /plan_w_team - Create implementation plans
 │   ├── continue.md        # /continue - Resume agent with context
@@ -84,18 +85,27 @@ tactical-engineering-plugin/
 
 ## Quick Start
 
+### From scratch (Party Mode)
 1. Install the plugin (see Installation above)
-2. Plan your feature: `/plan_w_team "feature description"`
-3. Execute the plan: `/build specs/your-plan.md`
-4. Monitor progress: `/status`
-5. Validate completion: `/validate specs/your-plan.md`
-6. Compound learnings: `/compound specs/your-plan.md`
+2. Set env: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+3. Run: `/party "your idea"`
+4. Follow the 4-phase workflow: brainstorm, plan, build, validate
+
+### From a spec (Build Mode)
+1. Plan your feature: `/plan_w_team "feature description"`
+2. Execute the plan: `/build specs/your-plan.md`
+3. Monitor progress: `/status`
+4. Validate completion: `/validate specs/your-plan.md`
+5. Compound learnings: `/compound specs/your-plan.md`
 
 ## Commands
 
 ### Planning
 - `/plan_w_team` - Create detailed implementation plan with team coordination
 - `/plan` - Quick planning mode for simpler features
+
+### Full Lifecycle
+- `/party` - Run a full product team from idea to implementation (brainstorm, plan, build, validate)
 
 ### Execution
 - `/build` - Execute a plan with multi-agent coordination
@@ -110,6 +120,51 @@ tactical-engineering-plugin/
 ### Validation & Knowledge
 - `/validate` - Run validation commands and check acceptance criteria
 - `/compound` - Extract and document learnings from completed builds
+
+## Party Mode
+
+Party mode (`/party`) takes an idea from concept to implementation using a team of 8 specialist agents powered by Claude Agent Teams.
+
+**Phases:**
+1. **Brainstorm** - All agents research the topic from their expertise, lead synthesizes findings
+2. **Plan** - Agents contribute domain-specific planning, lead assembles a `/build`-compatible spec
+3. **Build** - Tasks created from spec, agents self-claim and implement
+4. **Validate** - QA validates, Docs writes documentation, DevOps checks deployment readiness
+
+User checkpoints between each phase let you approve, refine, adjust the team, or abort.
+
+**Team Roster:**
+
+| Agent | Role |
+|-------|------|
+| pm | Product Manager |
+| architect | System Architect |
+| backend | Backend Developer |
+| frontend | Frontend Developer |
+| qa | QA Engineer |
+| ux | UX Designer |
+| docs | Tech Writer |
+| devops | DevOps Engineer |
+
+**Prerequisites:**
+```bash
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+```
+
+**Usage:**
+```bash
+/party "Build user authentication with OAuth"
+```
+
+### Party vs Build
+
+| | `/party` | `/build` |
+|---|----------|----------|
+| Input | An idea/topic | A pre-written spec |
+| Phases | brainstorm, plan, build, validate | Build only |
+| Team | 8 fixed specialists | Defined in spec |
+| Output | Spec + implementation + docs | Implementation only |
+| Best for | New features from scratch | Implementing existing plans |
 
 ## Workflow Example
 
