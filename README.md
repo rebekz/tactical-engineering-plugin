@@ -13,7 +13,12 @@ A Claude Code plugin for multi-agent orchestration using the Compound Engineerin
 ### Install from GitHub
 
 ```bash
+# Install directly from the repository
+claude plugin install github:rebekz/tactical-engineering-plugin
+
+# Or clone and install locally
 git clone https://github.com/rebekz/tactical-engineering-plugin.git
+claude plugin install ./tactical-engineering-plugin
 ```
 
 ### Quick Test (without installing)
