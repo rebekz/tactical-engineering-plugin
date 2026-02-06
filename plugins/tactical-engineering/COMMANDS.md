@@ -34,6 +34,79 @@ Quick planning mode for simpler features.
 /plan "Add user authentication"
 ```
 
+### `/party`
+
+Run a full product team through brainstorm → plan → build → validate using Agent Teams.
+
+**Usage:**
+```bash
+# Start a party with a topic
+/party "Build user authentication with OAuth"
+
+# Resume an interrupted party (auto-detects from state)
+/party "Build user authentication with OAuth"
+```
+
+**What it does:**
+1. Spawns 8 specialist agents (PM, Architect, Backend, Frontend, QA, UX, Docs, DevOps)
+2. **BRAINSTORM**: All agents research the topic from their expertise, lead synthesizes findings
+3. **PLAN**: Agents contribute planning from their domain, lead assembles a `/build`-compatible spec
+4. **BUILD**: Tasks created from spec, agents self-claim and implement, lead monitors progress
+5. **VALIDATE**: QA validates, Docs writes docs, DevOps checks deployment readiness
+6. User checkpoint between each phase (approve/refine/adjust/abort)
+
+**Prerequisites:**
+```bash
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+```
+
+**Comparison with `/build --team`:**
+
+| Aspect | `/party` | `/build --team` |
+|--------|----------|-----------------|
+| Input | An idea/topic | A pre-written spec |
+| Phases | 4 (brainstorm → plan → build → validate) | Build only |
+| Team size | 8 specialists (fixed roster) | Defined in spec |
+| Produces | Spec + Implementation + Docs | Implementation only |
+| Best for | New features from scratch | Implementing existing plans |
+
+**Team Roster:**
+
+| Agent | Role | Primary Phases |
+|-------|------|---------------|
+| pm | Product Manager | Brainstorm, Plan |
+| architect | System Architect | Brainstorm, Plan, Build |
+| backend | Backend Developer | Plan, Build |
+| frontend | Frontend Developer | Plan, Build |
+| qa | QA Engineer | Plan, Build, Validate |
+| ux | UX Designer | Brainstorm, Plan |
+| docs | Tech Writer | Build, Validate |
+| devops | DevOps Engineer | Build, Validate |
+
+**Example output:**
+```
+Party Mode: "Build user authentication with OAuth"
+Phase: 2/4 (PLAN)
+
+Collecting planning contributions...
+✅ PM: User stories with acceptance criteria
+✅ Architect: Component architecture and tech stack
+✅ Backend: API task breakdown
+✅ Frontend: UI component hierarchy
+✅ QA: Test strategy and validation commands
+✅ UX: User flow descriptions
+✅ Docs: Documentation plan
+✅ DevOps: Deployment strategy
+
+Assembling spec → specs/party-build-user-auth.md
+
+Plan assembled. What next?
+> Proceed to Build (recommended)
+> Edit plan
+> Revise
+> Abort
+```
+
 ## Execution Commands
 
 ### `/build`

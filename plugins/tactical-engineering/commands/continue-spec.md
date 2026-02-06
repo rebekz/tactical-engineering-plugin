@@ -214,6 +214,119 @@ After completing each task:
   // Process completion messages, update state, run validation
   // When all tasks complete, proceed to Phase 4 (Completion)
 
+} else if (state && state.build.mode === 'party') {
+  const currentPhase = state.party.currentPhase
+  const phaseNames = ["brainstorm", "plan", "build", "validate"]
+  const phaseName = phaseNames[currentPhase - 1] || "unknown"
+
+  console.log(`Build mode: Party Mode`)
+  console.log(`Topic: "${state.party.topic}"`)
+  console.log(`Current phase: ${currentPhase}/4 (${phaseName})`)
+  console.log("Agent Teams do not support session resumption.")
+  console.log("Will create a fresh team for remaining work.\n")
+
+  // Show phase history
+  for (const phase of state.party.phases) {
+    const icon = phase.status === 'completed' ? '✅' :
+                 phase.status === 'in-progress' ? '🔄' : '⏳'
+    console.log(`  ${icon} Phase ${phase.phase}: ${phase.name} - ${phase.status}`)
+  }
+
+  // Clean up any orphaned team resources from previous interrupted build
+  try {
+    TeamDelete()
+  } catch (e) {
+    // Team doesn't exist from previous session - that's fine
+  }
+
+  // Create fresh team
+  TeamCreate({
+    team_name: state.build.teamName,
+    description: `Party resume: ${state.party.topic}`
+  })
+
+  // Spawn agents with phase-appropriate instructions and cross-phase context
+  const context = state.party.context || {}
+  const contextSummary = [
+    context.keyDecisions?.length ? `Key Decisions: ${context.keyDecisions.join('; ')}` : '',
+    context.architectureChoices?.length ? `Architecture: ${context.architectureChoices.join('; ')}` : '',
+    context.constraints?.length ? `Constraints: ${context.constraints.join('; ')}` : ''
+  ].filter(Boolean).join('\n')
+
+  for (const agent of state.party.roster) {
+    let phaseInstructions = ''
+
+    if (currentPhase <= 1) {
+      // Brainstorm incomplete → restart brainstorm
+      phaseInstructions = `Phase: BRAINSTORM (restarting)
+Research this topic from your expertise domain.
+Message the lead with your findings when ready.`
+    } else if (currentPhase === 2) {
+      // Plan incomplete → restart plan phase
+      phaseInstructions = `Phase: PLAN (restarting)
+Contribute your planning expertise based on the brainstorm context below.
+Message the lead with your plan contribution when ready.`
+    } else if (currentPhase === 3) {
+      // Build incomplete → resume with pending tasks
+      phaseInstructions = `Phase: BUILD (resuming)
+Check TaskList for remaining tasks matching your expertise.
+Claim available tasks and implement them.
+Message the lead on completion of each task.`
+    } else if (currentPhase === 4) {
+      // Validate incomplete → restart validation
+      phaseInstructions = `Phase: VALIDATE (restarting)
+Run validation for your area of expertise.
+Message the lead with your validation report.`
+    }
+
+    Task({
+      team_name: state.build.teamName,
+      name: agent.name,
+      subagent_type: agent.agentType || 'general-purpose',
+      model: agent.model || 'sonnet',
+      prompt: `You are the ${agent.role} on a party-mode team (RESUMED session).
+Topic: "${state.party.topic}"
+
+Context from previous phases:
+${contextSummary}
+
+${state.party.brainstormSummary ? `Brainstorm summary available at: ${state.party.brainstormSummary}` : ''}
+${state.party.planPath ? `Plan spec available at: ${state.party.planPath}` : ''}
+
+${phaseInstructions}
+`
+    })
+  }
+
+  // For build phase, recreate TaskList from state and assign remaining tasks
+  if (currentPhase === 3) {
+    const remainingTasks = state.tasks.filter(t => t.status !== 'completed')
+    const completedCount = state.tasks.filter(t => t.status === 'completed').length
+
+    if (remainingTasks.length === 0) {
+      console.log("\nAll build tasks already completed! Proceeding to validation.")
+      // Lead should advance to Phase 4 (VALIDATE)
+    } else {
+      console.log(`\nHonoring ${completedCount} completed tasks.`)
+      console.log(`Resuming ${remainingTasks.length} remaining build tasks with fresh team.`)
+
+      // Recreate TaskList entries for remaining tasks
+      for (const task of remainingTasks) {
+        TaskCreate({
+          subject: task.subject,
+          description: task.description
+        })
+      }
+    }
+  }
+
+  // Resume is handled - the lead (this session) continues the party workflow
+  // from the current phase using the respawned team.
+  // Proceed to the appropriate phase logic in the party command.
+  console.log(`\nParty team respawned. Resume the party workflow with:`)
+  console.log(`  /party "${state.party.topic}"`)
+  console.log(`The party command will detect existing state and resume from Phase ${currentPhase}.`)
+
 } else {
   // Subagent mode (existing behavior) - continue with Phase 2
   console.log("Build mode: Subagents (default)")
@@ -448,6 +561,7 @@ if (compound === "Run /compound") {
 | **Corrupted state file** | JSON parse error | Warning: "State file corrupted, attempting repair from TaskList..." |
 | **State file missing** | File doesn't exist (ENOENT) | Info: "No state file found, checking TaskList..." |
 | **Team-mode build interrupted** | `state.build.mode === "team"` | Create fresh team with `TeamCreate`, spawn teammates, assign only remaining tasks. Agent Teams cannot resume sessions. |
+| **Party-mode interrupted** | `state.build.mode === "party"` | Create fresh team, spawn agents with phase context, resume from `party.currentPhase`. Phases 1-2 restart, Phase 3 resumes pending tasks, Phase 4 restarts validation. |
 
 ### Spec Modification Detection
 

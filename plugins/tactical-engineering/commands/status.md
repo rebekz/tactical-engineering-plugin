@@ -77,13 +77,52 @@ Recent Messages:
 - frontend-ui: "Need API contract from backend-api"
 ```
 
+## Party Mode Output
+
+If the build is running in Party Mode (detected from state file `build.mode === "party"`):
+
+Read the state file from `.claude/specs/<spec-name>/state.json` to detect party mode.
+Read the team config from `~/.claude/teams/<teamName>/config.json` for teammate details.
+
+```
+Build Mode: Party Mode
+Topic: "<party topic>"
+Phase: <N>/4 (<phase-name>) <progress-bar>
+
+Phase History:
+| Phase | Status | Duration | Artifacts |
+|-------|--------|----------|-----------|
+| 1. Brainstorm | ✅ Complete | 3m 42s | brainstorm-summary.md |
+| 2. Plan | ✅ Complete | 5m 18s | specs/party-<topic>.md |
+| 3. Build | 🔄 In Progress | 8m 12s | 7/10 tasks done |
+| 4. Validate | ⏳ Pending | - | - |
+
+Active Agents:
+| Name | Role | Current Task | Status |
+|------|------|-------------|--------|
+| pm | Product Manager | (idle) | Waiting |
+| architect | System Architect | Task 8: API Gateway | Building |
+| backend | Backend Developer | Task 9: Auth Service | Building |
+| frontend | Frontend Developer | Task 7: Login UI | Building |
+| qa | QA Engineer | (idle) | Waiting for build |
+| ux | UX Designer | (idle) | Waiting |
+| docs | Tech Writer | (idle) | Waiting for validate |
+| devops | DevOps Engineer | (idle) | Waiting for validate |
+
+Key Decisions:
+- <decision 1>
+- <decision 2>
+```
+
 ## Workflow
 
 1. Call `TaskList({})` to get all tasks
 2. Format output by status (pending, in_progress, completed)
 3. Show dependencies for blocked tasks
 4. If there are background agents, show their status
-5. Read state file to detect team mode. If team mode, read team config and show teammate table.
+5. Read state file to detect build mode:
+   - If team mode, read team config and show teammate table
+   - If party mode, show phase progress, phase history, active agents, and key decisions
 
 ## Report
 

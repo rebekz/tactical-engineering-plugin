@@ -168,14 +168,23 @@ function deleteStateFile(specPath) {
  * Create initial state object for a new build
  * @param {string} specPath - Path to spec file
  * @param {Array} tasks - Array of task objects
- * @param {string} mode - Build mode: "subagent" (default) or "team"
+ * @param {string} mode - Build mode: "subagent" (default), "team", or "party"
+ * @param {object} partyOptions - Party mode options (topic, roster)
  * @returns {object} Initial state object
  */
-function createInitialState(specPath, tasks, mode = 'subagent') {
-  const checksum = calculateChecksum(specPath);
+function createInitialState(specPath, tasks, mode = 'subagent', partyOptions = null) {
   const now = new Date().toISOString();
 
-  return {
+  // Party mode may not have a spec file yet (created during plan phase)
+  let checksum = null;
+  try {
+    checksum = calculateChecksum(specPath);
+  } catch (e) {
+    if (mode !== 'party') throw e;
+    // Party mode: spec doesn't exist yet, checksum set later
+  }
+
+  const state = {
     build: {
       specPath: specPath,
       specChecksum: checksum,
@@ -183,7 +192,7 @@ function createInitialState(specPath, tasks, mode = 'subagent') {
       lastUpdated: now,
       totalTasks: tasks.length,
       mode: mode,
-      teamName: mode === 'team' ? sanitizeSpecName(specPath) : null
+      teamName: (mode === 'team' || mode === 'party') ? sanitizeSpecName(specPath) : null
     },
     tasks: tasks.map(t => ({
       id: t.id,
@@ -202,6 +211,70 @@ function createInitialState(specPath, tasks, mode = 'subagent') {
       acceptanceCriteria: []
     }
   };
+
+  // Add party-specific state
+  if (mode === 'party' && partyOptions) {
+    state.party = {
+      topic: partyOptions.topic || '',
+      currentPhase: 1,
+      phases: [
+        { phase: 1, name: 'brainstorm', startedAt: null, completedAt: null, status: 'pending', artifacts: [], userApproval: null },
+        { phase: 2, name: 'plan', startedAt: null, completedAt: null, status: 'pending', artifacts: [], userApproval: null },
+        { phase: 3, name: 'build', startedAt: null, completedAt: null, status: 'pending', artifacts: [], userApproval: null },
+        { phase: 4, name: 'validate', startedAt: null, completedAt: null, status: 'pending', artifacts: [], userApproval: null }
+      ],
+      roster: partyOptions.roster || [],
+      brainstormSummary: null,
+      planPath: null,
+      context: {
+        keyDecisions: [],
+        architectureChoices: [],
+        constraints: []
+      }
+    };
+  }
+
+  return state;
+}
+
+/**
+ * Update party phase in state
+ * @param {string} specPath - Path to spec file
+ * @param {number} phase - Phase number (1-4)
+ * @param {object} updates - Fields to update in the phase
+ */
+function updatePartyPhase(specPath, phase, updates) {
+  const state = readStateFile(specPath);
+  if (!state || !state.party) {
+    throw new Error(`No party state found for ${specPath}`);
+  }
+
+  const phaseIndex = state.party.phases.findIndex(p => p.phase === phase);
+  if (phaseIndex === -1) {
+    throw new Error(`Phase ${phase} not found in party state`);
+  }
+
+  state.party.phases[phaseIndex] = {
+    ...state.party.phases[phaseIndex],
+    ...updates
+  };
+
+  if (updates.status === 'in-progress' || updates.status === 'completed') {
+    state.party.currentPhase = phase;
+  }
+
+  state.build.lastUpdated = new Date().toISOString();
+  writeStateFile(specPath, state);
+}
+
+/**
+ * Get current party phase from state
+ * @param {object} state - State object
+ * @returns {number} Current phase number (1-4) or 0 if not party mode
+ */
+function getPartyPhase(state) {
+  if (!state || !state.party) return 0;
+  return state.party.currentPhase || 1;
 }
 
 /**
@@ -254,5 +327,7 @@ module.exports = {
   updateTaskInState,
   deleteStateFile,
   createInitialState,
-  rebuildStateFromTaskList
+  rebuildStateFromTaskList,
+  updatePartyPhase,
+  getPartyPhase
 };
