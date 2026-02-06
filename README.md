@@ -4,20 +4,71 @@ A Claude Code plugin for multi-agent orchestration using the Compound Engineerin
 
 ## Installation
 
-```bash
-# Install as a Claude Code plugin
-claude plugin add /path/to/tactical-engineering-plugin
-
-# Or clone and install from GitHub
-git clone https://github.com/rebekz/tactical-engineering-plugin.git
-claude plugin add ./tactical-engineering-plugin
-```
-
-## Prerequisites
+### Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/build-with-claude/claude-code/overview) CLI installed
 - [Node.js](https://nodejs.org/) (for helper scripts)
 - [uv](https://docs.astral.sh/uv/) (for Python hook validators, optional)
+
+### Install from GitHub
+
+```bash
+git clone https://github.com/rebekz/tactical-engineering-plugin.git
+```
+
+### Quick Test (without installing)
+
+Load the plugin directly for a single session:
+
+```bash
+claude --plugin-dir /path/to/tactical-engineering-plugin
+```
+
+### Enable the Plugin
+
+After cloning, enable the plugin in your desired scope:
+
+```bash
+# For personal use across all projects (user scope)
+claude plugin enable tactical-engineering --scope user
+
+# For a specific project (shared with team via git)
+claude plugin enable tactical-engineering --scope project
+
+# For a specific project (local only, gitignored)
+claude plugin enable tactical-engineering --scope local
+```
+
+### Verify Installation
+
+```bash
+# List installed plugins
+claude plugin list
+
+# Or inside a Claude Code session
+/plugins
+```
+
+### Plugin Management
+
+```bash
+# Disable the plugin
+claude plugin disable tactical-engineering
+
+# Update to latest version
+claude plugin update tactical-engineering
+
+# Uninstall
+claude plugin uninstall tactical-engineering
+```
+
+### Installation Scopes
+
+| Scope | Settings File | Use Case |
+|-------|--------------|----------|
+| `user` | `~/.claude/settings.json` | Personal use across all projects (default) |
+| `project` | `.claude/settings.json` | Shared with team via version control |
+| `local` | `.claude/settings.local.json` | Project-specific, gitignored |
 
 ## Overview
 
