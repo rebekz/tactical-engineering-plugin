@@ -1,9 +1,9 @@
 ---
 name: build
 description: Execute a plan document from specs/ directory with multi-agent coordination. Use after planning to implement the feature.
-argument-hint: [path-to-plan]
+argument-hint: [path-to-plan] [--team]
 model: opus
-allowed-tools: Task, TaskOutput, Bash, Glob, Grep, Read, Edit, Write, NotebookEdit, WebFetch, WebSearch, AskUserQuestion, Skill, TodoWrite
+allowed-tools: Task, TaskOutput, Bash, Glob, Grep, Read, Edit, Write, NotebookEdit, WebFetch, WebSearch, AskUserQuestion, Skill, TodoWrite, TeamCreate, TeamDelete, SendMessage
 ---
 
 # Build
@@ -13,6 +13,7 @@ Execute the implementation plan at `PATH_TO_PLAN` using multi-agent coordination
 ## Variables
 
 - `PATH_TO_PLAN`: $1 - Path to the plan file (e.g., `specs/conversational-ui-revamp.md`)
+- `TEAM_MODE`: --team - Use Agent Teams instead of subagents for execution
 - `TEAM_MEMBERS`: `agents/*.md` - Available team members
 - `GENERAL_PURPOSE_AGENT`: `general-purpose` - Default agent type
 
@@ -23,6 +24,30 @@ Execute the implementation plan at `PATH_TO_PLAN` using multi-agent coordination
 - If no `PATH_TO_PLAN` is provided, STOP and ask the user to provide it
 - The plan must exist and follow the plan format created by `plan_w_team`
 - Read the plan document completely before starting execution
+
+### Mode Detection
+
+Parse arguments to determine execution mode:
+
+```typescript
+// Check if --team flag is present
+const TEAM_MODE = arguments.includes('--team')
+
+if (TEAM_MODE) {
+  // Verify Agent Teams experimental flag is enabled
+  const agentTeamsEnabled = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1'
+  if (!agentTeamsEnabled) {
+    console.error("Error: Agent Teams requires the experimental flag.")
+    console.error("Enable it with:")
+    console.error("  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1")
+    console.error("Then restart Claude Code and retry.")
+    return
+  }
+  console.log("Mode: Agent Teams (--team)")
+} else {
+  console.log("Mode: Subagents (default)")
+}
+```
 
 ### Execution Strategy
 
@@ -46,25 +71,56 @@ Your role is ORCHESTRATION, not IMPLEMENTATION. Use agents to do the actual work
 
 ## Workflow
 
-### Phase 0: Resume Detection (NEW)
+### Phase 0: Resume Detection
 
 Before starting, check for existing state from a previous build:
 
 ```typescript
 // Load state file helper functions
 // Note: These functions are available in scripts/state-file.js
-// For now, implement inline or load as needed
 
 const existingState = readStateFile(PATH_TO_PLAN)
 
 if (existingState) {
+  const previousMode = existingState.build.mode || 'subagent'
+  const currentMode = TEAM_MODE ? 'team' : 'subagent'
   const inProgressTasks = existingState.tasks.filter(t => t.status === 'in-progress')
   const completedTasks = existingState.tasks.filter(t => t.status === 'completed')
 
-  if (inProgressTasks.length > 0) {
-    // Previous build was interrupted
-    console.log(`Previous build found:`)
-    console.log(`- Status: In-progress (${completedTasks.length}/${existingState.build.totalTasks} tasks completed)`)
+  // Mixed-mode detection: state was created with different mode than current invocation
+  if (previousMode !== currentMode) {
+    console.warn(`Previous build used ${previousMode} mode, but current invocation uses ${currentMode} mode.`)
+
+    const action = await AskUserQuestion({
+      question: `Mode mismatch: previous build was ${previousMode}, current is ${currentMode}. What should we do?`,
+      options: [
+        {
+          label: "Continue with current mode",
+          description: `Honor ${completedTasks.length} completed tasks, use ${currentMode} mode for remaining`
+        },
+        {
+          label: "Start completely fresh",
+          description: "Discard all previous progress and start over"
+        },
+        { label: "Abort", description: "Cancel and keep existing state" }
+      ]
+    })
+
+    if (action === "Abort") return
+    if (action === "Start completely fresh") {
+      // Clean up team resources if previous was team mode
+      if (previousMode === 'team' && existingState.build.teamName) {
+        try { TeamDelete() } catch (e) { /* team may not exist */ }
+      }
+      deleteStateFile(PATH_TO_PLAN)
+      // Proceed with fresh build
+    }
+    // "Continue with current mode" falls through to resume logic below
+  }
+
+  if (inProgressTasks.length > 0 || (completedTasks.length > 0 && completedTasks.length < existingState.build.totalTasks)) {
+    console.log(`Previous build found (${previousMode} mode):`)
+    console.log(`- Status: ${completedTasks.length}/${existingState.build.totalTasks} tasks completed`)
     console.log(`- Started: ${existingState.build.startedAt}`)
 
     const action = await AskUserQuestion({
@@ -76,18 +132,24 @@ if (existingState) {
     })
 
     if (action === "Fresh") {
+      // Clean up team resources if previous was team mode
+      if (previousMode === 'team' && existingState.build.teamName) {
+        try { TeamDelete() } catch (e) { /* team may not exist */ }
+      }
       deleteStateFile(PATH_TO_PLAN)
       console.log("Starting fresh build...")
-      // Proceed with fresh build
     } else {
-      // Resume logic - jump to Phase 4 with existing tasks
       console.log("Resuming previous build...")
       return resumeBuild(existingState)
     }
+  } else if (completedTasks.length === existingState.build.totalTasks) {
+    // All completed, auto-start fresh without asking
+    console.log("Previous build completed. Starting fresh build...")
+    if (previousMode === 'team' && existingState.build.teamName) {
+      try { TeamDelete() } catch (e) { /* team may not exist */ }
+    }
+    deleteStateFile(PATH_TO_PLAN)
   }
-  // If all completed, auto-start fresh without asking
-  console.log("Previous build completed. Starting fresh build...")
-  deleteStateFile(PATH_TO_PLAN)
 }
 ```
 
@@ -133,30 +195,12 @@ for (const taskDef of parsedTasks) {
   tasks.push({ ...taskDef, id: result.taskId })
 }
 
-// Create initial state file
-const state = {
-  build: {
-    specPath: PATH_TO_PLAN,
-    specChecksum: calculateChecksum(PATH_TO_PLAN),
-    startedAt: new Date().toISOString(),
-    lastUpdated: new Date().toISOString(),
-    totalTasks: tasks.length
-  },
-  tasks: tasks.map(t => ({
-    id: t.id,
-    subject: t.subject,
-    description: t.description,
-    status: t.status || 'pending',
-    activeForm: t.activeForm,
-    blockedBy: t.blockedBy || [],
-    agentType: t.agentType || 'general-purpose'
-  })),
-  artifacts: [],
-  validation: { commandsRun: [], acceptanceCriteria: [] }
-}
+// Create initial state file using createInitialState helper
+const mode = TEAM_MODE ? 'team' : 'subagent'
+const state = createInitialState(PATH_TO_PLAN, tasks, mode)
 
 writeStateFile(PATH_TO_PLAN, state)
-console.log(`✓ State saved to .claude/specs/${sanitizeSpecName(PATH_TO_PLAN)}/state.json`)
+console.log(`✓ State saved (${mode} mode) to .claude/specs/${sanitizeSpecName(PATH_TO_PLAN)}/state.json`)
 ```
 
 ### Phase 3: Set Dependencies
@@ -177,7 +221,11 @@ TaskUpdate({
 })
 ```
 
-### Phase 4: Deploy Agents
+### Phase 4: Deploy Agents (Subagent Mode) / Spawn Teammates (Team Mode)
+
+**If `TEAM_MODE` is enabled, skip to [Phase 4-T: Team Mode Execution](#phase-4-t-team-mode-execution) below.**
+
+#### Phase 4-S: Subagent Mode (Default)
 
 Use the `Task` tool to deploy agents for each task:
 
@@ -208,7 +256,196 @@ Report progress as you complete each subtask.`,
 - **Parallel** (`run_in_background: true`): Task has no dependencies or can run independently
 - **Sequential** (`run_in_background: false`): Task depends on other tasks completing first
 
-### Phase 5: Monitor & Coordinate
+#### Phase 4-T: Team Mode Execution
+
+**This section only applies when `TEAM_MODE` is enabled. Skip if using subagent mode.**
+
+##### Step 1: Create Team
+
+```typescript
+const teamName = sanitizeSpecName(PATH_TO_PLAN)
+
+// Check for existing team (orphaned from previous build)
+try {
+  TeamCreate({
+    team_name: teamName,
+    description: `Build: ${specTitle}`
+  })
+} catch (error) {
+  // Team already exists - ask user
+  const action = await AskUserQuestion({
+    question: `Team "${teamName}" already exists (possibly from an incomplete build). What should we do?`,
+    options: [
+      { label: "Delete and recreate", description: "Clean up existing team and start fresh" },
+      { label: "Abort", description: "Cancel the build" }
+    ]
+  })
+  if (action === "Abort") return
+  TeamDelete()
+  TeamCreate({ team_name: teamName, description: `Build: ${specTitle}` })
+}
+```
+
+##### Step 2: Spawn Teammates
+
+```typescript
+// Parse team members from spec's "### Team Members" section
+const teamMembers = parseTeamMembers(specContent)
+// Each member has: name, role, agentType, model (optional), planApproval (optional)
+
+// Cost confirmation
+const action = await AskUserQuestion({
+  question: `About to spawn ${teamMembers.length} teammates (each is a full Claude session). Proceed?`,
+  options: [
+    { label: "Proceed", description: `Spawn ${teamMembers.length} teammates and start building` },
+    { label: "Abort", description: "Cancel and clean up team" }
+  ]
+})
+if (action === "Abort") {
+  TeamDelete()
+  return
+}
+
+// Spawn each teammate
+for (const member of teamMembers) {
+  Task({
+    team_name: teamName,
+    name: member.name,
+    subagent_type: member.agentType || 'general-purpose',
+    mode: member.planApproval ? 'plan' : 'default',
+    model: member.model || 'opus',
+    prompt: `You are ${member.name}, a teammate on the "${teamName}" team.
+Your role: ${member.role}
+
+## Your Tasks
+Check the shared task list with TaskList. Work on tasks assigned to you (owner: "${member.name}").
+When your assigned tasks are done, claim unassigned unblocked tasks with:
+  TaskUpdate({ taskId, owner: "${member.name}", status: "in_progress" })
+Prefer tasks in ID order (lowest first).
+
+## After Completing Each Task
+1. Mark completed: TaskUpdate({ taskId, status: "completed" })
+2. Send the lead a completion summary:
+   SendMessage({ type: "message", recipient: "team-lead", content: "Completed task [ID]: [summary of what was done]", summary: "Task [ID] complete" })
+3. Check TaskList for your next available task
+4. If no more tasks available, send:
+   SendMessage({ type: "message", recipient: "team-lead", content: "All my tasks are done.", summary: "All tasks done" })
+
+## Coordination
+- Message the lead for blockers or questions
+- Message other teammates directly if you need to coordinate on shared interfaces
+- Read ~/.claude/teams/${teamName}/config.json to find teammate names`
+  })
+}
+```
+
+##### Step 3: Assign Initial Tasks
+
+```typescript
+// Assign unblocked tasks to their designated teammates
+const unblockedTasks = tasks.filter(t => !t.blockedBy || t.blockedBy.length === 0)
+
+for (const task of unblockedTasks) {
+  // Get assignee from spec's "Assigned To" field for this task
+  const assignee = findAssigneeFromSpec(task, teamMembers)
+
+  TaskUpdate({
+    taskId: task.id,
+    owner: assignee.name,
+    status: "in_progress"
+  })
+  updateTaskInState(PATH_TO_PLAN, task.id, {
+    status: "in-progress",
+    teammateName: assignee.name,
+    deployedAt: new Date().toISOString()
+  })
+}
+
+// Tasks with dependencies are left unassigned - teammates will self-claim them
+// as they become unblocked (dependencies complete)
+```
+
+##### Step 4: Monitor via Messages
+
+```typescript
+// In team mode, messages from teammates arrive AUTOMATICALLY
+// No polling with TaskOutput needed
+
+// The lead's monitoring loop:
+// 1. PROCESS COMPLETION MESSAGES
+//    When a teammate reports task completion:
+//    a. Capture output from message content
+//    b. Run validation hooks (Phase 5.5 logic) using message content as agentOutput
+//    c. Update state: updateTaskInState(specPath, taskId, {
+//         status: "completed",
+//         lastOutput: messageContent.slice(0, 500)
+//       })
+//    d. Check if newly unblocked tasks exist and assign them
+
+// 2. HANDLE PLAN APPROVAL REQUESTS (if teammate has Plan Approval: true)
+//    When teammate sends plan_approval_request:
+//    - Review the plan
+//    - SendMessage({ type: "plan_approval_response", recipient: teammateName,
+//        request_id: requestId, approve: true/false,
+//        content: "feedback if rejecting" })
+
+// 3. RESOLVE BLOCKERS
+//    If a teammate reports a blocker:
+//    - Assess the situation
+//    - Resolve or escalate to user via AskUserQuestion
+//    - Send resolution: SendMessage({ type: "message", recipient: teammateName,
+//        content: "resolution details", summary: "Blocker resolved" })
+
+// 4. DETECT STALLED TEAMMATES
+//    If a teammate has been working with no messages for an extended period:
+//    - Send check-in: SendMessage({ type: "message", recipient: teammateName,
+//        content: "Status update on your current task?", summary: "Check-in" })
+//    - If no response after check-in, ask user:
+//      AskUserQuestion: "Teammate [name] is unresponsive."
+//      Options: "Respawn replacement" / "Skip their tasks" / "Wait longer"
+//    - If respawn: spawn a new teammate, assign the stalled task
+
+// 5. TRACK OVERALL PROGRESS
+//    Periodically check TaskList for overall status
+//    When all tasks are completed → proceed to Phase 7 (Validation)
+```
+
+##### Step 5: Shutdown & Cleanup
+
+```typescript
+// After all tasks complete (or on abort):
+
+// 1. Request shutdown for each teammate
+for (const member of teamMembers) {
+  SendMessage({
+    type: "shutdown_request",
+    recipient: member.name,
+    content: "Build complete. Shutting down."
+  })
+}
+
+// 2. Wait briefly for shutdown acknowledgments
+// Teammates respond with shutdown_response { approve: true }
+// If no response within 30 seconds, proceed anyway
+
+// 3. Clean up team resources
+TeamDelete()
+
+// 4. Update state file
+state.build.completedAt = new Date().toISOString()
+state.build.lastUpdated = new Date().toISOString()
+writeStateFile(PATH_TO_PLAN, state)
+
+// 5. Proceed to Phase 7 (Validation) and Phase 8 (State Updates)
+```
+
+**After Team Mode Execution completes, skip to [Phase 7: Validation](#phase-7-validation).**
+
+---
+
+### Phase 5: Monitor & Coordinate (Subagent Mode Only)
+
+**This section applies to subagent mode. Team mode uses Phase 4-T Step 4 above.**
 
 While agents are working:
 
@@ -256,9 +493,11 @@ Task({
 })
 ```
 
-### Phase 5.5: Per-Task Validation Hooks (NEW)
+### Phase 5.5: Per-Task Validation Hooks
 
 **Critical:** Before marking any task as "completed", run validation hooks defined in the spec.
+
+**Team Mode Note:** In team mode, the teammate's completion message content is used as `agentOutput` for validation. The lead captures the message content and passes it to the hooks in the same way as subagent mode uses `TaskOutput` results.
 
 ```typescript
 // After agent finishes, run validation hooks before marking complete
@@ -417,7 +656,9 @@ if (state) {
 
 ### Phase 8: State Updates During Execution
 
-**Critical:** Keep the state file updated as tasks progress:
+**Critical:** Keep the state file updated as tasks progress.
+
+#### Subagent Mode State Updates
 
 ```typescript
 // Mark task as in_progress
@@ -454,10 +695,32 @@ state.artifacts.push({
 writeStateFile(PATH_TO_PLAN, state)
 ```
 
+#### Team Mode State Updates
+
+```typescript
+// When assigning task to teammate
+updateTaskInState(PATH_TO_PLAN, taskId, {
+  status: "in-progress",
+  teammateName: assignee.name,
+  deployedAt: new Date().toISOString()
+})
+
+// When teammate completes a task (from completion message)
+updateTaskInState(PATH_TO_PLAN, taskId, {
+  status: "completed",
+  lastOutput: completionMessage.content.slice(0, 500)
+})
+
+// On build completion (after shutdown)
+state.build.completedAt = new Date().toISOString()
+state.build.lastUpdated = new Date().toISOString()
+writeStateFile(PATH_TO_PLAN, state)
+```
+
 **State Update Milestones:**
 - After Phase 2 (all tasks created)
 - After each task completion
-- After each agent deployment (store agentId)
+- After each agent deployment (store agentId) or teammate assignment (store teammateName)
 - On build completion
 - On any interruption/error
 
@@ -489,8 +752,11 @@ deleteStateFile(specPath) // Removes state directory
 // Sanitize spec name
 sanitizeSpecName(specPath) // "specs/user-auth.md" -> "user-auth"
 
+// Create initial state with mode
+createInitialState(specPath, tasks, mode) // mode: "subagent" or "team"
+
 // Rebuild from TaskList
-rebuildStateFromTaskList(tasks, specPath) // Auto-repair
+rebuildStateFromTaskList(tasks, specPath, mode) // Auto-repair
 ```
 
 **Validation Hooks Helpers** (see `scripts/hooks.js`):
@@ -629,35 +895,42 @@ Agents Running:
 When all tasks are complete, provide:
 
 ```
-✅ Build Complete!
+Build Complete!
 
 Plan: specs/<plan-name>.md
+Mode: <Subagents | Agent Teams>
 Duration: <time taken>
 Tasks Completed: <N>/<N>
 
 Summary:
-- <Component 1>: ✅ Complete
-- <Component 2>: ✅ Complete
-- <Component 3>: ✅ Complete
+- <Component 1>: Complete
+- <Component 2>: Complete
+- <Component 3>: Complete
 
 Validation:
-✅ All validation commands passed
-✅ All acceptance criteria met
+- All validation commands passed
+- All acceptance criteria met
 
 Files Modified:
 - <list of files created/modified>
 
-📚 Document Learnings
+Document Learnings
 Run /compound to capture learnings from this build:
   /compound specs/<plan-name>.md
 
-This creates ADRs, solutions, and updates patterns for future builds.
-Each build makes future builds easier by capturing what was learned.
-
-💾 State Saved
+State Saved
 Build state persisted to: .claude/specs/<spec-name>/state.json
 Run /continue-spec to resume across sessions:
   /continue-spec specs/<plan-name>.md
+```
+
+**Team Mode additions to report:**
+
+```
+Teammates:
+- <teammate-1-name> (<agent-type>): <N> tasks completed
+- <teammate-2-name> (<agent-type>): <N> tasks completed
+Team resources cleaned up.
 ```
 
 ## Report Format
@@ -667,8 +940,11 @@ After completing the build, provide a concise report following the Completion Re
 ## Examples
 
 ```bash
-# Basic usage
+# Basic usage (subagent mode - default)
 /build specs/conversational-ui-revamp.md
+
+# Agent Teams mode - teammates communicate directly, self-claim tasks
+/build specs/user-auth.md --team
 
 # Resume from previous build (auto-detected)
 /build specs/user-auth.md
@@ -689,6 +965,9 @@ After completing the build, provide a concise report following the Completion Re
 1. **Create ALL tasks first** - Before deploying any agents, create the full task list
 2. **Use descriptive prompts** - Give agents clear, detailed instructions
 3. **Monitor actively** - Check on agents regularly, don't just wait
-4. **Resume when appropriate** - Use resume pattern for follow-up work on same task
+4. **Resume when appropriate** - Use resume pattern for follow-up work on same task (subagent mode)
 5. **Handle failures gracefully** - Assess and recover, don't just fail
 6. **Communicate progress** - Keep user informed of what's happening
+7. **Use --team for cross-cutting work** - When tasks need to coordinate (e.g., frontend/backend API contracts), use Agent Teams
+8. **Use subagents for independent tasks** - When tasks are self-contained and don't need inter-agent communication, subagent mode is cheaper and simpler
+9. **Avoid file conflicts in team mode** - Ensure spec assigns different files to different teammates

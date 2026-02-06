@@ -63,7 +63,15 @@ function readStateFile(specPath) {
 
   try {
     const content = fs.readFileSync(statePath, 'utf8');
-    return JSON.parse(content);
+    const state = JSON.parse(content);
+
+    // Backward compatibility: default mode to "subagent" for old state files
+    if (state && state.build && !state.build.mode) {
+      state.build.mode = 'subagent';
+      state.build.teamName = null;
+    }
+
+    return state;
   } catch (error) {
     if (error.code === 'ENOENT') {
       // File doesn't exist - not an error, just return null
@@ -157,12 +165,13 @@ function deleteStateFile(specPath) {
 }
 
 /**
- * Rebuild state from TaskList (for auto-repair)
- * @param {Array} tasks - Array of tasks from TaskList
+ * Create initial state object for a new build
  * @param {string} specPath - Path to spec file
- * @returns {object} Rebuilt state object
+ * @param {Array} tasks - Array of task objects
+ * @param {string} mode - Build mode: "subagent" (default) or "team"
+ * @returns {object} Initial state object
  */
-function rebuildStateFromTaskList(tasks, specPath) {
+function createInitialState(specPath, tasks, mode = 'subagent') {
   const checksum = calculateChecksum(specPath);
   const now = new Date().toISOString();
 
@@ -172,7 +181,9 @@ function rebuildStateFromTaskList(tasks, specPath) {
       specChecksum: checksum,
       startedAt: now,
       lastUpdated: now,
-      totalTasks: tasks.length
+      totalTasks: tasks.length,
+      mode: mode,
+      teamName: mode === 'team' ? sanitizeSpecName(specPath) : null
     },
     tasks: tasks.map(t => ({
       id: t.id,
@@ -182,7 +193,48 @@ function rebuildStateFromTaskList(tasks, specPath) {
       activeForm: t.activeForm,
       blockedBy: t.blockedBy || [],
       agentType: t.agentType || 'general-purpose',
-      // Don't include agentId - we don't have it from TaskList
+      agentId: null,
+      teammateName: null
+    })),
+    artifacts: [],
+    validation: {
+      commandsRun: [],
+      acceptanceCriteria: []
+    }
+  };
+}
+
+/**
+ * Rebuild state from TaskList (for auto-repair)
+ * @param {Array} tasks - Array of tasks from TaskList
+ * @param {string} specPath - Path to spec file
+ * @param {string} mode - Build mode: "subagent" (default) or "team"
+ * @returns {object} Rebuilt state object
+ */
+function rebuildStateFromTaskList(tasks, specPath, mode = 'subagent') {
+  const checksum = calculateChecksum(specPath);
+  const now = new Date().toISOString();
+
+  return {
+    build: {
+      specPath: specPath,
+      specChecksum: checksum,
+      startedAt: now,
+      lastUpdated: now,
+      totalTasks: tasks.length,
+      mode: mode,
+      teamName: mode === 'team' ? sanitizeSpecName(specPath) : null
+    },
+    tasks: tasks.map(t => ({
+      id: t.id,
+      subject: t.subject,
+      description: t.description,
+      status: t.status || 'pending',
+      activeForm: t.activeForm,
+      blockedBy: t.blockedBy || [],
+      agentType: t.agentType || 'general-purpose',
+      agentId: null,
+      teammateName: null
     })),
     artifacts: [],
     validation: {
@@ -201,5 +253,6 @@ module.exports = {
   writeStateFile,
   updateTaskInState,
   deleteStateFile,
+  createInitialState,
   rebuildStateFromTaskList
 };

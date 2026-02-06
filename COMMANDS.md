@@ -42,28 +42,54 @@ Execute a plan with multi-agent coordination.
 
 **Usage:**
 ```bash
+# Subagent mode (default) - independent, focused tasks
 /build specs/conversational-ui-revamp.md
+
+# Agent Teams mode - teammates communicate directly, self-claim tasks
+/build specs/user-auth.md --team
 ```
+
+**Flags:**
+- `--team` - Use Agent Teams instead of subagents (requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`)
+- `--fresh` - Start over from beginning, ignoring previous state
+- `--phase N` - Start from specific phase
+- `--from-task NAME` - Continue from a specific task
 
 **What it does:**
 1. Parses the plan document
 2. Creates tasks in the shared task list
 3. Sets up task dependencies
-4. Deploys agents for each task
-5. Monitors progress
+4. Deploys agents/teammates for each task
+5. Monitors progress (polling for subagents, messages for teams)
 6. Handles parallel/sequential execution
+7. Validates results and persists state
+
+**Subagent vs Agent Teams:**
+
+| Aspect | Subagents (default) | Agent Teams (--team) |
+|--------|-------------------|---------------------|
+| Communication | One-way (worker to lead) | Multi-directional (any to any) |
+| Task claiming | Lead assigns explicitly | Self-claiming + lead assignment |
+| Token cost | Lower | Higher (each teammate = full session) |
+| Best for | Independent, focused tasks | Cross-cutting work needing coordination |
+| Resume | Agent resume via agentId | Fresh team for remaining tasks |
+
+**Prerequisites for `--team`:**
+```bash
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+```
 
 **Example output:**
 ```
-🔄 Build Progress
+Build Progress
 
 Phase 1: Foundation
-✅ Task 1: Setup database
-🔄 Task 2: Create migrations
+Task 1: Setup database - Complete
+Task 2: Create migrations - In progress
 
 Phase 2: Core Implementation
-⏳ Task 3: Build frontend (waiting)
-⏳ Task 4: Build backend (waiting)
+Task 3: Build frontend (waiting)
+Task 4: Build backend (waiting)
 ```
 
 ### `/continue`
@@ -99,11 +125,37 @@ Retry a failed task with corrected instructions.
 - Wrong approach was taken
 - Requirements need clarification
 
+### `/continue-spec`
+
+Resume the entire build workflow from a spec file.
+
+**Usage:**
+```bash
+/continue-spec specs/user-auth.md
+/continue-spec specs/user-auth.md --dry-run
+/continue-spec specs/user-auth.md --from-task 5
+/continue-spec specs/user-auth.md --restart
+```
+
+**What it does:**
+1. Reads state file to detect previous build progress
+2. **Auto-detects build mode** (subagent or team) from state file
+3. For subagent mode: resumes agents with preserved context when possible
+4. For team mode: creates fresh team and assigns remaining tasks (Agent Teams do not support session resumption)
+5. Validates spec hasn't changed (checksum detection)
+
+**Flags:**
+- `--dry-run` - Show what would be done without executing
+- `--from-task N` - Start from specific task N
+- `--restart` - Ignore completed tasks, start fresh
+
 ## Monitoring Commands
 
 ### `/status`
 
 Show status of all tasks and running agents.
+
+**Team mode awareness:** When a team-mode build is active, `/status` reads the team config and displays a teammate table with names, agent types, current tasks, and status.
 
 **Usage:**
 ```bash

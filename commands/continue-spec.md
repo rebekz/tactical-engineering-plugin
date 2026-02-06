@@ -3,7 +3,7 @@ name: continue-spec
 description: Resume work from a spec file by detecting completed/in-progress/pending tasks and continuing from where work stopped. Use after /build is interrupted.
 argument-hint: <path-to-spec> [options]
 model: opus
-allowed-tools: Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet, Bash, Glob, Grep, Read, Edit, Write, AskUserQuestion, Skill
+allowed-tools: Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage, Bash, Glob, Grep, Read, Edit, Write, AskUserQuestion, Skill
 ---
 
 # Continue Spec Resume
@@ -27,6 +27,7 @@ Unlike `/continue <agent-id>` (which resumes one specific agent), this command r
 - `DRY_RUN`: --dry-run - Show what would be done without executing
 - `FROM_TASK`: --from-task N - Start execution from specific task N
 - `RESTART`: --restart - Ignore completed tasks, start fresh
+- `TEAM_MODE_AUTO`: Auto-detected from state file `build.mode` field (no flag needed)
 
 ## Instructions
 
@@ -126,7 +127,102 @@ if (state) {
 - State file has checksum for spec modification detection
 - TaskList fallback ensures compatibility with in-progress builds
 
+### Phase 1.5: Team Mode Detection
+
+After loading state, check the build mode and branch accordingly:
+
+```typescript
+// Auto-detect team mode from state file
+if (state && state.build.mode === 'team') {
+  console.log(`Build mode: Agent Teams (team: ${state.build.teamName})`)
+  console.log("Agent Teams do not support session resumption.")
+  console.log("Will create a fresh team for remaining tasks.\n")
+
+  // Check for orphaned team resources from previous build
+  // Team config at: ~/.claude/teams/{teamName}/config.json
+  const teamConfigPath = `~/.claude/teams/${state.build.teamName}/config.json`
+
+  // Clean up any orphaned team resources
+  try {
+    TeamDelete()  // Clean up if team exists from previous interrupted build
+  } catch (e) {
+    // Team doesn't exist - that's fine
+  }
+
+  // Filter to remaining tasks only
+  const remainingTasks = state.tasks.filter(t => t.status !== 'completed')
+  const completedCount = state.tasks.filter(t => t.status === 'completed').length
+
+  if (remainingTasks.length === 0) {
+    console.log("All tasks already completed!")
+    // Prompt for /compound
+    return
+  }
+
+  console.log(`Honoring ${completedCount} completed tasks.`)
+  console.log(`Resuming ${remainingTasks.length} remaining tasks with fresh team.\n`)
+
+  // Create fresh team
+  TeamCreate({
+    team_name: state.build.teamName,
+    description: `Resume build: ${state.build.specPath}`
+  })
+
+  // Read spec to get team member definitions
+  const specContent = Read(SPEC_PATH)
+  const teamMembers = parseTeamMembers(specContent)
+
+  // Spawn teammates
+  for (const member of teamMembers) {
+    Task({
+      team_name: state.build.teamName,
+      name: member.name,
+      subagent_type: member.agentType || 'general-purpose',
+      mode: member.planApproval ? 'plan' : 'default',
+      model: member.model || 'opus',
+      prompt: `You are ${member.name}, a teammate on the "${state.build.teamName}" team.
+Your role: ${member.role}
+
+This is a RESUMED build. Some tasks are already completed.
+Check TaskList for your assigned tasks. Only work on pending/in-progress tasks.
+
+After completing each task:
+1. Mark completed: TaskUpdate({ taskId, status: "completed" })
+2. Send the lead a completion summary via SendMessage
+3. Check TaskList for next available task
+4. If no more tasks, notify the lead you're done`
+    })
+  }
+
+  // Assign remaining tasks to teammates
+  for (const task of remainingTasks) {
+    const assignee = findAssigneeFromSpec(task, teamMembers)
+    TaskUpdate({
+      taskId: task.id,
+      owner: assignee.name,
+      status: "in_progress"
+    })
+    updateTaskInState(SPEC_PATH, task.id, {
+      status: "in-progress",
+      teammateName: assignee.name,
+      deployedAt: new Date().toISOString()
+    })
+  }
+
+  // Monitor via messages (same as /build --team Phase 6)
+  // Messages arrive automatically from teammates
+  // Process completion messages, update state, run validation
+  // When all tasks complete, proceed to Phase 4 (Completion)
+
+} else {
+  // Subagent mode (existing behavior) - continue with Phase 2
+  console.log("Build mode: Subagents (default)")
+}
+```
+
 ### Phase 2: In-Progress Handling
+
+**Note:** Phase 2 only applies to subagent-mode builds. Team-mode builds handle remaining tasks in Phase 1.5 above.
 
 **Goal**: Handle in-progress tasks with user choice
 
@@ -351,6 +447,7 @@ if (compound === "Run /compound") {
 | **Agents lost** | TaskOutput fails or timeout | Info: "Agent no longer accessible, starting fresh deployment" |
 | **Corrupted state file** | JSON parse error | Warning: "State file corrupted, attempting repair from TaskList..." |
 | **State file missing** | File doesn't exist (ENOENT) | Info: "No state file found, checking TaskList..." |
+| **Team-mode build interrupted** | `state.build.mode === "team"` | Create fresh team with `TeamCreate`, spawn teammates, assign only remaining tasks. Agent Teams cannot resume sessions. |
 
 ### Spec Modification Detection
 
