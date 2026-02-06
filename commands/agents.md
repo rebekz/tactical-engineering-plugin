@@ -8,16 +8,15 @@ allowed-tools: Glob, Grep, Read
 
 # Agents
 
-List all available team members (agents) from `.claude/agents/team/*.md` and their roles.
+List all available team members (agents) and their roles. Agents are auto-discovered from the plugin's `agents/` directory.
 
 ## Variables
 
-- `TEAM_MEMBERS`: `.claude/agents/team/*.md`
 - `GENERAL_PURPOSE_AGENT`: `general-purpose`
 
 ## Instructions
 
-1. **Find Agent Files** - Use `Glob` to find all files in `.claude/agents/team/*.md`
+1. **Find Agent Files** - Use `Glob` to find all agent `.md` files in the `agents/` directory
 2. **Read Agent Definitions** - Read each agent file to extract:
    - Name (from frontmatter or title)
    - Description
@@ -28,7 +27,7 @@ List all available team members (agents) from `.claude/agents/team/*.md` and the
 ## Output Format
 
 ```
-🤖 Available Team Members
+Available Team Members
 
 General Purpose:
 - general-purpose - Default agent for general tasks
@@ -45,7 +44,7 @@ Specialized Agents:
 
 ## Workflow
 
-1. Use `Glob` to find `.claude/agents/team/*.md`
+1. Use `Glob` to find `agents/*.md` files
 2. Use `Read` to read each file
 3. Extract name, description, role from each file
 4. Format and display

@@ -533,7 +533,7 @@ function updateSpecCheckbox(specPath, taskId) {
 
 ## Helper Functions Reference
 
-The following functions are available (see `.claude/helpers/state-file.js`):
+The following functions are available (see `scripts/state-file.js`):
 
 ```javascript
 // Get state file path from spec path

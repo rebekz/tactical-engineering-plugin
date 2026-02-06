@@ -10,12 +10,12 @@ hooks:
     - hooks:
         - type: command
           command: >-
-            uv run $CLAUDE_PROJECT_DIR/.claude/hooks/validators/validate_new_file.py
+            uv run $CLAUDE_PLUGIN_ROOT/hooks/validators/validate_new_file.py
             --directory specs
             --extension .md
         - type: command
           command: >-
-            uv run $CLAUDE_PROJECT_DIR/.claude/hooks/validators/validate_file_contains.py
+            uv run $CLAUDE_PLUGIN_ROOT/hooks/validators/validate_file_contains.py
             --directory specs
             --extension .md
             --contains '## Task Description'
@@ -46,7 +46,7 @@ Create a detailed implementation plan based on user requirements, accept an exis
 - `BMAD_OUTPUT_PATH`: $1 (BMad mode, after `--bmad`) - Path to BMad output directory (`_bmad_output/planning-artifacts/`)
 - `ORCHESTRATION_PROMPT`: $2 - (Optional) Guidance for team assembly, task structure, and execution strategy
 - `PLAN_OUTPUT_DIRECTORY`: `specs/`
-- `TEAM_MEMBERS`: `.claude/agents/team/*.md`
+- `TEAM_MEMBERS`: `agents/*.md`
 - `GENERAL_PURPOSE_AGENT`: `general-purpose`
 
 ## Instructions

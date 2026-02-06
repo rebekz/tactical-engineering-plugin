@@ -635,11 +635,11 @@ Knowledge compounded! Future builds will now benefit from these learnings.
 
 ## References
 
-- Compound Engineering Philosophy: `.claude/docs/compound-engineering.md`
+- Compound Engineering Philosophy: `docs/plugin-docs/compound-engineering.md`
 - ADR Format: https://adr.github.io/
-- Task Analyzer Agent: `.claude/agents/task-analyzer-agent.md`
-- Architecture Writer Agent: `.claude/agents/architecture-writer-agent.md`
-- Deployment Writer Agent: `.claude/agents/deployment-writer-agent.md`
-- Mistake Extractor Agent: `.claude/agents/mistake-extractor-agent.md`
-- CLAUDE Updater Agent: `.claude/agents/claude-updater-agent.md`
-- Doc Assembler Agent: `.claude/agents/doc-assembler-agent.md`
+- Task Analyzer Agent: `agents/task-analyzer-agent.md`
+- Architecture Writer Agent: `agents/architecture-writer-agent.md`
+- Deployment Writer Agent: `agents/deployment-writer-agent.md`
+- Mistake Extractor Agent: `agents/mistake-extractor-agent.md`
+- CLAUDE Updater Agent: `agents/claude-updater-agent.md`
+- Doc Assembler Agent: `agents/doc-assembler-agent.md`

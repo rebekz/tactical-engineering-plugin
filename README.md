@@ -1,6 +1,23 @@
 # Tactical Engineering
 
-This project implements an approach to planning and executing with AI agents using Claude Code, combined with the Compound Engineering workflow from Every.
+A Claude Code plugin for multi-agent orchestration using the Compound Engineering workflow pattern (Plan, Work, Review, Compound).
+
+## Installation
+
+```bash
+# Install as a Claude Code plugin
+claude plugin add /path/to/tactical-engineering-plugin
+
+# Or clone and install from GitHub
+git clone https://github.com/rebekz/tactical-engineering-plugin.git
+claude plugin add ./tactical-engineering-plugin
+```
+
+## Prerequisites
+
+- [Claude Code](https://docs.anthropic.com/en/docs/build-with-claude/claude-code/overview) CLI installed
+- [Node.js](https://nodejs.org/) (for helper scripts)
+- [uv](https://docs.astral.sh/uv/) (for Python hook validators, optional)
 
 ## Overview
 
@@ -28,23 +45,59 @@ Based on research from:
 - **Skills** - Reusable prompt templates
 - **Hooks** - Pre/Post tool execution automation
 
-## Project Structure
+## Plugin Structure
 
 ```
-.claude/
-├── agents/           # Sub-agent definitions
-├── skills/           # Reusable skills
-├── docs/             # Learnings/compound knowledge
-└── plan-*.md         # Generated plans
+tactical-engineering-plugin/
+├── .claude-plugin/
+│   └── plugin.json        # Plugin manifest
+├── commands/              # Slash commands
+│   ├── build.md           # /build - Execute plans with multi-agent coordination
+│   ├── compound.md        # /compound - Extract and document learnings
+│   ├── plan-w-team.md     # /plan_w_team - Create implementation plans
+│   ├── continue.md        # /continue - Resume agent with context
+│   ├── continue-spec.md   # /continue-spec - Resume from spec state
+│   ├── retry.md           # /retry - Retry failed tasks
+│   ├── validate.md        # /validate - Check acceptance criteria
+│   ├── status.md          # /status - Monitor task progress
+│   └── agents.md          # /agents - List team members
+├── agents/                # Specialized sub-agents
+│   ├── context-gatherer.md
+│   ├── code-reviewer.md
+│   ├── backend-agent.md
+│   ├── frontend-agent.md
+│   ├── test-agent.md
+│   ├── docs-agent.md
+│   ├── task-planner.md
+│   ├── task-analyzer-agent.md
+│   ├── architecture-writer-agent.md
+│   ├── claude-updater-agent.md
+│   ├── deployment-writer-agent.md
+│   ├── doc-assembler-agent.md
+│   └── mistake-extractor-agent.md
+├── skills/                # Auto-activating skills
+│   ├── work/SKILL.md      # Implement plans
+│   ├── plan/SKILL.md      # Create plans
+│   ├── review/SKILL.md    # Review changes
+│   ├── compound/SKILL.md  # Compound learnings
+│   └── zai-cli/SKILL.md   # Z.AI CLI integration
+├── hooks/                 # Event-driven automation
+│   ├── hooks.json         # Hook configuration
+│   └── validators/        # Python validation scripts
+├── scripts/               # Node.js helper utilities
+│   ├── state-file.js      # Build state persistence
+│   └── hooks.js           # Validation hook helpers
+└── docs/                  # Reference documentation
 ```
 
 ## Quick Start
 
-1. Install Claude Code: `npm install -g @anthropic-ai/claude-code`
+1. Install the plugin (see Installation above)
 2. Plan your feature: `/plan_w_team "feature description"`
 3. Execute the plan: `/build specs/your-plan.md`
 4. Monitor progress: `/status`
 5. Validate completion: `/validate specs/your-plan.md`
+6. Compound learnings: `/compound specs/your-plan.md`
 
 ## Commands
 
@@ -55,14 +108,16 @@ Based on research from:
 ### Execution
 - `/build` - Execute a plan with multi-agent coordination
 - `/continue` - Resume an agent with additional work (preserves context)
+- `/continue-spec` - Resume a build from saved state across sessions
 - `/retry` - Retry a failed task with corrections
 
 ### Monitoring
 - `/status` - Show status of all tasks and running agents
 - `/agents` - List available team members
 
-### Validation
+### Validation & Knowledge
 - `/validate` - Run validation commands and check acceptance criteria
+- `/compound` - Extract and document learnings from completed builds
 
 ## Workflow Example
 

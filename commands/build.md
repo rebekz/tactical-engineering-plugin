@@ -13,7 +13,7 @@ Execute the implementation plan at `PATH_TO_PLAN` using multi-agent coordination
 ## Variables
 
 - `PATH_TO_PLAN`: $1 - Path to the plan file (e.g., `specs/conversational-ui-revamp.md`)
-- `TEAM_MEMBERS`: `.claude/agents/team/*.md` - Available team members
+- `TEAM_MEMBERS`: `agents/*.md` - Available team members
 - `GENERAL_PURPOSE_AGENT`: `general-purpose` - Default agent type
 
 ## Instructions
@@ -52,7 +52,7 @@ Before starting, check for existing state from a previous build:
 
 ```typescript
 // Load state file helper functions
-// Note: These functions are available in .claude/helpers/state-file.js
+// Note: These functions are available in scripts/state-file.js
 // For now, implement inline or load as needed
 
 const existingState = readStateFile(PATH_TO_PLAN)
@@ -465,7 +465,7 @@ writeStateFile(PATH_TO_PLAN, state)
 
 The following functions are available:
 
-**State File Helpers** (see `.claude/helpers/state-file.js`):
+**State File Helpers** (see `scripts/state-file.js`):
 
 ```javascript
 // Get state file path from spec path
@@ -493,7 +493,7 @@ sanitizeSpecName(specPath) // "specs/user-auth.md" -> "user-auth"
 rebuildStateFromTaskList(tasks, specPath) // Auto-repair
 ```
 
-**Validation Hooks Helpers** (see `.claude/helpers/hooks.js`):
+**Validation Hooks Helpers** (see `scripts/hooks.js`):
 
 ```javascript
 // Extract hooks YAML from a task section in spec

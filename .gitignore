@@ -1,5 +1,8 @@
-# Claude Code plan files
+# Claude Code local settings
+.claude/settings.local.json
+.claude/*.local.md
 .claude/plan-*.md
+.claude/specs/
 
 # OS files
 .DS_Store
@@ -24,3 +27,6 @@ npm-debug.log*
 dist/
 build/
 *.tgz
+
+# Node
+node_modules/
