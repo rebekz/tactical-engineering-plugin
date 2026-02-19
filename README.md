@@ -1,186 +1,257 @@
 # Tactical Engineering
 
-A Claude Code plugin for multi-agent orchestration using the Compound Engineering workflow pattern (Plan, Work, Review, Compound).
+A Claude Code plugin for multi-agent orchestration. Take an idea from brainstorm to production-ready code with automated planning, parallel agent execution, and knowledge compounding.
 
 ## Installation
 
-Inside a Claude Code session, run:
-
-```
+```bash
 /plugin marketplace add https://github.com/rebekz/tactical-engineering-plugin
 /plugin install tactical-engineering
 ```
 
-## Overview
+## The Workflow
 
-Based on research from:
-- [Claude Sub-Agents Workflow (Full Demo)](https://www.youtube.com/watch?v=-zzbkh9B-5Q) - Ray Fernando
-- [IndyDevDan's Skill, Subagent, and Slash Command VSCode Snippets](https://gist.github.com/disler/d9f1285892b9faf573a0699aad70658f)
-- [Compound Engineering With Claude Code](https://www.thisisuncharted.co/p/ai-agents-100x-engineers-every)
-- [Learning from Every's Compound Engineering](https://lethain.com/everyinc-compound-engineering/)
-- [Claude Code Hooks Mastery](https://github.com/disler/claude-code-hooks-mastery)
+Every feature follows the same lifecycle. Commands map to phases. Each phase produces artifacts the next phase consumes.
 
-## Core Concepts
+```mermaid
+graph LR
+    A[Idea] --> B[Brainstorm]
+    B --> C[Plan]
+    C --> D[Build]
+    D --> E[Validate]
+    E --> F[Compound]
+    F -.->|feeds back| C
 
-### The Four Compound Engineering Patterns
-
-1. **Plan** - Decouple implementation from research
-2. **Work** - Implement the plan
-3. **Review** - Review changes against best practices
-4. **Compound** - Summarize learnings for future iterations
-
-### Key Workflow Components
-
-- **Plan Mode (Shift+Tab)** - Non-negotiable first step
-- **Task System** - TaskCreate, TaskUpdate, TaskList, TaskGet
-- **Sub-Agents** - Specialized agents (200K token context each)
-- **Skills** - Reusable prompt templates
-- **Hooks** - Pre/Post tool execution automation
-
-## Plugin Structure
-
+    style A fill:#f9f,stroke:#333
+    style B fill:#bbf,stroke:#333
+    style C fill:#bfb,stroke:#333
+    style D fill:#fbf,stroke:#333
+    style E fill:#ffb,stroke:#333
+    style F fill:#bff,stroke:#333
 ```
-tactical-engineering-plugin/
-├── .claude-plugin/
-│   └── plugin.json        # Plugin manifest
-├── commands/              # Slash commands
-│   ├── build.md           # /build - Execute plans with multi-agent coordination
-│   ├── party.md           # /party - Full-lifecycle multi-agent product team
-│   ├── compound.md        # /compound - Extract and document learnings
-│   ├── plan-w-team.md     # /plan_w_team - Create implementation plans
-│   ├── continue.md        # /continue - Resume agent with context
-│   ├── continue-spec.md   # /continue-spec - Resume from spec state
-│   ├── retry.md           # /retry - Retry failed tasks
-│   ├── validate.md        # /validate - Check acceptance criteria
-│   ├── status.md          # /status - Monitor task progress
-│   └── agents.md          # /agents - List team members
-├── agents/                # Specialized sub-agents
-│   ├── context-gatherer.md
-│   ├── code-reviewer.md
-│   ├── backend-agent.md
-│   ├── frontend-agent.md
-│   ├── test-agent.md
-│   ├── docs-agent.md
-│   ├── task-planner.md
-│   ├── task-analyzer-agent.md
-│   ├── architecture-writer-agent.md
-│   ├── claude-updater-agent.md
-│   ├── deployment-writer-agent.md
-│   ├── doc-assembler-agent.md
-│   └── mistake-extractor-agent.md
-├── skills/                # Auto-activating skills
-│   ├── work/SKILL.md      # Implement plans
-│   ├── plan/SKILL.md      # Create plans
-│   ├── review/SKILL.md    # Review changes
-│   ├── compound/SKILL.md  # Compound learnings
-│   └── zai-cli/SKILL.md   # Z.AI CLI integration
-├── hooks/                 # Event-driven automation
-│   ├── hooks.json         # Hook configuration
-│   └── validators/        # Python validation scripts
-├── scripts/               # Node.js helper utilities
-│   ├── state-file.js      # Build state persistence
-│   └── hooks.js           # Validation hook helpers
-└── docs/                  # Reference documentation
-```
+
+| Phase | What happens | Command | Output |
+|-------|-------------|---------|--------|
+| **Brainstorm** | Explore the idea, ask questions, pick an approach | `/party` or manual | `docs/brainstorms/*.md` |
+| **Plan** | Research codebase, design solution, define tasks and team | `/plan_w_team` | `specs/*.md` |
+| **Build** | Agents execute tasks in parallel, you orchestrate | `/build` | Working code |
+| **Validate** | Run tests, check acceptance criteria, verify quality | `/validate` | Pass/fail report |
+| **Compound** | Extract ADRs, solutions, patterns, update CLAUDE.md | `/compound` | `docs/adr/`, `docs/solutions/`, CLAUDE.md |
+
+The compound phase is what makes this a loop — learnings from each build inform future plans.
 
 ## Quick Start
 
-### From scratch (Party Mode)
-1. Install the plugin (see Installation above)
-2. Set env: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
-3. Run: `/party "your idea"`
-4. Follow the 4-phase workflow: brainstorm, plan, build, validate
+Pick the path that matches where you're starting from.
 
-### From a spec (Build Mode)
-1. Plan your feature: `/plan_w_team "feature description"`
-2. Execute the plan: `/build specs/your-plan.md`
-3. Monitor progress: `/status`
-4. Validate completion: `/validate specs/your-plan.md`
-5. Compound learnings: `/compound specs/your-plan.md`
+### Path 1: From an idea
 
-## Commands
+Use `/party` for a full 8-agent product team, or go step by step.
 
-### Planning
-- `/plan_w_team` - Create detailed implementation plan with team coordination
-- `/plan` - Quick planning mode for simpler features
+```bash
+# Option A: Full autopilot with Party Mode
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+/party "Build user authentication with OAuth"
+# -> brainstorm -> plan -> build -> validate (with checkpoints)
 
-### Full Lifecycle
-- `/party` - Run a full product team from idea to implementation (brainstorm, plan, build, validate)
+# Option B: Step by step
+/plan_w_team "Build user authentication with OAuth"
+/build specs/user-authentication.md
+/status                                    # monitor progress
+/validate specs/user-authentication.md     # verify results
+/compound specs/user-authentication.md     # capture learnings
+```
 
-### Execution
-- `/build` - Execute a plan with multi-agent coordination
-- `/continue` - Resume an agent with additional work (preserves context)
-- `/continue-spec` - Resume a build from saved state across sessions
-- `/retry` - Retry a failed task with corrections
+### Path 2: From existing plan documents
 
-### Monitoring
-- `/status` - Show status of all tasks and running agents
-- `/agents` - List available team members
+Import one or more existing plans directly.
 
-### Validation & Knowledge
-- `/validate` - Run validation commands and check acceptance criteria
-- `/compound` - Extract and document learnings from completed builds
+```bash
+# Single document
+/plan_w_team --accept docs/plans/my-plan.md
 
-## Party Mode
+# Multiple documents — merges into one unified spec
+/plan_w_team --accept docs/plans/backend.md,docs/plans/frontend.md,docs/plans/api.md
 
-Party mode (`/party`) takes an idea from concept to implementation using a team of 8 specialist agents powered by Claude Agent Teams.
+# Then build
+/build specs/backend-frontend-api-merged.md
+```
 
-**Phases:**
-1. **Brainstorm** - All agents research the topic from their expertise, lead synthesizes findings
-2. **Plan** - Agents contribute domain-specific planning, lead assembles a `/build`-compatible spec
-3. **Build** - Tasks created from spec, agents self-claim and implement
-4. **Validate** - QA validates, Docs writes documentation, DevOps checks deployment readiness
+### Path 3: From BMad output
 
-User checkpoints between each phase let you approve, refine, adjust the team, or abort.
+Convert BMad planning artifacts (PRD, architecture, epics, stories) into an executable spec.
 
-**Team Roster:**
+```bash
+/plan_w_team --bmad ~/project/_bmad-output/planning-artifacts
+/build specs/product-name.md
+```
 
-| Agent | Role |
-|-------|------|
-| pm | Product Manager |
-| architect | System Architect |
-| backend | Backend Developer |
-| frontend | Frontend Developer |
-| qa | QA Engineer |
-| ux | UX Designer |
-| docs | Tech Writer |
-| devops | DevOps Engineer |
+## Build Modes
 
-**Prerequisites:**
+Three levels of agent coordination. Pick based on task complexity.
+
+```mermaid
+graph TD
+    A{How complex?} -->|Independent tasks| B[Subagent Mode]
+    A -->|Cross-cutting work| C[Team Mode]
+    A -->|From scratch| D[Party Mode]
+
+    B --> B1["/build specs/plan.md"]
+    C --> C1["/build specs/plan.md --team"]
+    D --> D1["/party 'your idea'"]
+```
+
+| | Subagent (default) | Team (`--team`) | Party (`/party`) |
+|---|---|---|---|
+| **Agents** | Defined in spec | Defined in spec | 8 fixed specialists |
+| **Communication** | One-way (agent to lead) | Multi-directional | Multi-directional |
+| **Task claiming** | Lead assigns | Self-claiming | Self-claiming |
+| **Token cost** | Lower | Higher | Highest |
+| **Input** | A spec file | A spec file | An idea |
+| **Phases** | Build only | Build only | Brainstorm, Plan, Build, Validate |
+| **Best for** | Focused, independent tasks | Work needing coordination | New features from scratch |
+
+**Prerequisites for Team and Party modes:**
 ```bash
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 ```
 
-**Usage:**
+### Party Mode Team
+
+| Agent | Role | Active Phases |
+|-------|------|--------------|
+| pm | Product Manager | Brainstorm, Plan |
+| architect | System Architect | Brainstorm, Plan, Build |
+| backend | Backend Developer | Plan, Build |
+| frontend | Frontend Developer | Plan, Build |
+| qa | QA Engineer | Plan, Build, Validate |
+| ux | UX Designer | Brainstorm, Plan |
+| docs | Tech Writer | Build, Validate |
+| devops | DevOps Engineer | Build, Validate |
+
+User checkpoints between each phase let you approve, refine, adjust, or abort.
+
+## Command Reference
+
+See [COMMANDS.md](plugins/tactical-engineering/COMMANDS.md) for full details.
+
+### Planning
+
+| Command | Description | Key flags |
+|---------|------------|-----------|
+| `/plan_w_team` | Create, import, or merge implementation plans | `--accept <path>[,path,...]`, `--bmad <path>`, orchestration prompt |
+| `/plan` | Quick planning via skill (simpler features) | — |
+
+### Execution
+
+| Command | Description | Key flags |
+|---------|------------|-----------|
+| `/build` | Execute a spec with multi-agent coordination | `--team`, `--fresh`, `--phase N`, `--from-task NAME` |
+| `/party` | Full 8-agent lifecycle from idea to implementation | Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` |
+| `/continue` | Resume an agent with preserved context | `<agent-id> "instructions"` |
+| `/continue-spec` | Resume a build from saved state (cross-session) | `--dry-run`, `--from-task N`, `--restart` |
+| `/retry` | Retry a failed task with corrections | `<task-id> "correction"` |
+
+### Monitoring
+
+| Command | Description |
+|---------|------------|
+| `/status` | Task progress, agent status, teammate activity |
+| `/agents` | List all available agent types and roles |
+
+### Validation & Knowledge
+
+| Command | Description | Key flags |
+|---------|------------|-----------|
+| `/validate` | Run validation commands and check acceptance criteria | `<path-to-spec>` |
+| `/compound` | Extract learnings into ADRs, solutions, patterns, CLAUDE.md | `--dry-run`, `--force` |
+
+## The Compound Pipeline
+
+`/compound` is more than documentation — it launches 6 specialized agents in parallel:
+
+```mermaid
+graph TD
+    A["/compound specs/feature.md"] --> B[task-analyzer]
+    A --> C[architecture-writer]
+    A --> D[deployment-writer]
+    A --> E[mistake-extractor]
+    A --> F[claude-updater]
+    B --> G[doc-assembler]
+    C --> G
+    D --> G
+    E --> G
+    F --> G
+    G --> H["docs/adr/ + docs/solutions/ + CLAUDE.md"]
+```
+
+| Agent | Produces |
+|-------|---------|
+| task-analyzer | Extracts architecture decisions, errors, and patterns |
+| architecture-writer | Creates Architecture Decision Records (ADRs) |
+| deployment-writer | Updates deployment changelog |
+| mistake-extractor | Documents mistakes and solutions for future reference |
+| claude-updater | Updates CLAUDE.md with new patterns and conventions |
+| doc-assembler | Validates and assembles all outputs into final docs |
+
+Every build makes the next one smarter.
+
+## Agent Architecture
+
+20 agents organized in three tiers:
+
+| Tier | Count | Purpose | Used by |
+|------|-------|---------|---------|
+| **Core** | 7 | Implementation work — frontend, backend, testing, docs, planning, code review, context gathering | `/build`, `/plan_w_team` |
+| **Compound** | 6 | Knowledge extraction — ADRs, solutions, deployment docs, patterns, CLAUDE.md updates | `/compound` |
+| **Party** | 8 | Full product team — PM, Architect, Backend, Frontend, QA, UX, Docs, DevOps | `/party` |
+
+Run `/agents` to see the full list with descriptions.
+
+## Under the Hood
+
+### State Persistence
+
+Build progress is saved to `.claude/specs/<spec-name>/state.json`. Close Claude Code mid-build and resume later:
+
 ```bash
-/party "Build user authentication with OAuth"
+/continue-spec specs/user-auth.md          # picks up where you left off
+/continue-spec specs/user-auth.md --dry-run # preview what would run
 ```
 
-### Party vs Build
+State includes: task status, agent IDs, build mode (subagent/team/party), spec checksum for modification detection.
 
-| | `/party` | `/build` |
-|---|----------|----------|
-| Input | An idea/topic | A pre-written spec |
-| Phases | brainstorm, plan, build, validate | Build only |
-| Team | 8 fixed specialists | Defined in spec |
-| Output | Spec + implementation + docs | Implementation only |
-| Best for | New features from scratch | Implementing existing plans |
+### Hooks & Validation
 
-## Workflow Example
+**Plugin-level hooks** (`hooks.json`) — Run Python validators (ruff, ty) after every Write/Edit operation.
 
-```
-Terminal 1: Frontend agent building UI
-Terminal 2: Backend agent creating APIs
-Terminal 3: Test agent writing specs
-Terminal 4: Docs agent updating guides
-You: Orchestrating and reviewing
+**Command-level Stop hooks** — YAML frontmatter in commands defines validation that runs when a command finishes. For example, `/plan_w_team` validates that a new `.md` file exists in `specs/` with all 7 required sections.
+
+### Multi-Doc Merge
+
+When plans are split across multiple documents (backend + frontend + API), merge them:
+
+```bash
+/plan_w_team --accept backend.md,frontend.md,api.md "Prioritize backend tasks"
 ```
 
-## Sources
+The merge engine: reads all inputs, combines and renumbers tasks, deduplicates team members, merges acceptance criteria, auto-generates a filename, and records source paths in frontmatter for traceability.
 
-- [Claude Sub-Agents Workflow](https://www.youtube.com/watch?v=-zzbkh9B-5Q)
-- [IndyDevDan's VSCode Snippets](https://gist.github.com/disler/d9f1285892b9faf573a0699aad70658f)
-- [Compound Engineering Article](https://www.thisisuncharted.co/p/ai-agents-100x-engineers-every)
-- [Every's Compound Engineering](https://lethain.com/everyinc-compound-engineering/)
-- [Claude Code Hooks Mastery](https://github.com/disler/claude-code-hooks-mastery)
-- [Claude Code Tasks Guide](https://www.dplooy.com/blog/claude-code-tasks-complete-guide-to-ai-agent-workflow)
+## Plugin Structure
+
+```
+plugins/tactical-engineering/
+├── commands/           # 10 slash commands (plan, build, party, validate, ...)
+├── agents/             # 20 agent definitions (core + compound + party tiers)
+├── skills/             # 5 auto-activating skills (plan, work, review, compound, zai-cli)
+├── hooks/              # Event-driven validation (Python validators)
+├── scripts/            # Node.js utilities (state persistence, hook helpers)
+├── templates/          # Build templates (ralph-loop)
+├── COMMANDS.md         # Full command reference
+├── AGENTS.md           # Agent philosophy and catalog
+└── CLAUDE.md           # Agent guidelines and conventions
+```
+
+---
+
+Built on ideas from [Every's Compound Engineering](https://lethain.com/everyinc-compound-engineering/) and [IndyDevDan's agent patterns](https://gist.github.com/disler/d9f1285892b9faf573a0699aad70658f).
