@@ -6,16 +6,32 @@ This document describes all available commands for the multi-agent development w
 
 ### `/plan_w_team`
 
-Create detailed implementation plans with team coordination.
+Create detailed implementation plans with team coordination. Supports three modes:
 
-**Usage:**
+**Create Mode** (default) — Generate a new plan from a prompt:
 ```bash
 /plan_w_team "Feature description"
+
+# With orchestration guidance
+/plan_w_team "Build real-time chat" "Use frontend-agent for UI, backend-agent for API. Run in parallel."
 ```
 
-**With orchestration:**
+**Accept Mode** — Import existing plan document(s):
 ```bash
-/plan_w_team "Build real-time chat" "Use frontend-agent for UI, backend-agent for API. Run in parallel."
+# Single document
+/plan_w_team --accept docs/plans/my-plan.md
+/plan_w_team -a docs/plans/my-plan.md
+
+# Multiple documents (comma-separated) — merges into one spec
+/plan_w_team --accept docs/plans/backend.md,docs/plans/frontend.md,docs/plans/api.md
+
+# With orchestration to guide merge decisions
+/plan_w_team --accept docs/plans/backend.md,docs/plans/frontend.md "Prioritize backend tasks"
+```
+
+**BMad Mode** — Convert BMad output to spec:
+```bash
+/plan_w_team --bmad ~/project/_bmad-output/planning-artifacts
 ```
 
 **Output:** Creates `specs/<feature-name>.md` with:
@@ -24,6 +40,8 @@ Create detailed implementation plans with team coordination.
 - Implementation phases
 - Acceptance criteria
 - Validation commands
+
+**Multi-doc merge** reads all input files, applies AI-powered merge to combine tasks (renumbered), team members (deduplicated), acceptance criteria (combined), and relevant files (deduplicated) into a single unified spec. The merged output includes `merge_sources` in frontmatter for traceability.
 
 ### `/plan`
 

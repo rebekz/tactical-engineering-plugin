@@ -1,7 +1,7 @@
 ---
 name: plan_w_team
 description: Creates a detailed engineering implementation plan based on user requirements, accepts an existing plan document, or converts BMad output documents. Saves to specs directory.
-argument-hint: [user prompt or --accept <path> or --bmad <bmad-output-path>] [orchestration prompt]
+argument-hint: [user prompt or --accept <path>[,<path>,...] or --bmad <bmad-output-path>] [orchestration prompt]
 model: opus
 disallowed-tools: Task, EnterPlanMode
 allowed-tools: AskUserQuestion, Bash, Glob, Grep, Read, Write, Edit, WebFetch, WebSearch, TaskOutput
@@ -32,7 +32,7 @@ hooks:
 Create a detailed implementation plan based on user requirements, accept an existing plan document, or convert BMad output documents into specs. Supports three modes:
 
 1. **Create Mode**: Generate a new plan from a user prompt
-2. **Accept Mode**: Validate and import an existing plan document
+2. **Accept Mode**: Validate and import an existing plan document (single doc or multi-doc merge)
 3. **BMad Mode**: Convert BMad output (PRD, architecture, epics, stories) into specs
 
 ## Variables
@@ -42,7 +42,9 @@ Create a detailed implementation plan based on user requirements, accept an exis
   - If starts with `--accept` or `-a`: Accept mode (import existing plan)
   - Otherwise: Create mode (generate new plan from prompt)
 - `USER_PROMPT`: $1 (Create mode) - The feature or task description
-- `EXISTING_PLAN_PATH`: $1 (Accept mode, after `--accept`) - Path to existing plan document
+- `EXISTING_PLAN_PATH`: $1 (Accept mode, single doc, after `--accept`) - Path to existing plan document
+- `EXISTING_PLAN_PATHS`: $1 (Accept mode, multi-doc, after `--accept`) - Array of comma-separated paths to merge
+- `ACCEPT_MODE`: `single` or `multi` - Determined by presence of commas in the accept path argument
 - `BMAD_OUTPUT_PATH`: $1 (BMad mode, after `--bmad`) - Path to BMad output directory (`_bmad_output/planning-artifacts/`)
 - `ORCHESTRATION_PROMPT`: $2 - (Optional) Guidance for team assembly, task structure, and execution strategy
 - `PLAN_OUTPUT_DIRECTORY`: `specs/`
@@ -63,7 +65,14 @@ if ($1.startsWith("--bmad")) {
   ORCHESTRATION_PROMPT = $2
 } else if ($1.startsWith("--accept") || $1.startsWith("-a")) {
   MODE = "accept"
-  EXISTING_PLAN_PATH = $1.replace(/^--accept|-a/, "").trim()
+  const rawPath = $1.replace(/^(?:--accept|-a)/, "").trim()
+  if (rawPath.includes(",")) {
+    ACCEPT_MODE = "multi"
+    EXISTING_PLAN_PATHS = rawPath.split(",").map(p => p.trim())
+  } else {
+    ACCEPT_MODE = "single"
+    EXISTING_PLAN_PATH = rawPath
+  }
   ORCHESTRATION_PROMPT = $2
 } else {
   MODE = "create"
@@ -112,6 +121,82 @@ Before accepting a plan, verify it contains:
 - [ ] `## Acceptance Criteria`
 - [ ] `## Team Orchestration`
 - [ ] `### Team Members`
+
+#### Multi-Doc Merge (when ACCEPT_MODE is "multi")
+
+When multiple comma-separated paths are provided, merge all input documents into a single unified spec.
+
+##### Multi-Doc Merge Workflow
+
+1. **Validate Inputs** — For each path in `EXISTING_PLAN_PATHS`:
+   - Verify the file exists using the Read tool
+   - Verify the file is non-empty (has content beyond whitespace)
+   - Verify the file has a `.md` extension
+   - If ANY file is missing, empty, or invalid, report ALL errors at once and stop. Do not proceed with partial inputs.
+
+2. **Read All Documents** — Read each input file completely. Store the content and note the source path for each.
+
+3. **Merge Documents** — Using the Multi-Doc Merge Rules below, synthesize all inputs into one unified spec containing all 7 required sections:
+   - Combine `## Task Description` sections into a unified description covering all inputs
+   - Combine `## Objective` into a cohesive objective
+   - Merge `## Relevant Files` — union of all file references, deduplicated
+   - Combine `## Step by Step Tasks` — renumber sequentially, group by source document, remap internal dependency references to new numbering
+   - Merge `## Acceptance Criteria` — union of all criteria, deduplicated, preserve all
+   - Merge `## Team Orchestration` / `### Team Members` — deduplicate team members, combine role descriptions for members that appear in multiple inputs
+   - If `ORCHESTRATION_PROMPT` is provided, use it to guide merge decisions (priority, structure, team composition)
+
+4. **Generate Filename** — Extract stems from input filenames:
+   - Strip directory path (take basename only)
+   - Strip `-plan.md`, `-spec.md`, or `.md` suffix
+   - Join stems with `-` separator
+   - Append `-merged.md`
+   - If resulting filename exceeds 80 characters, use only the first 3 stems + `-merged.md`
+   - Check for collision in `specs/` directory — if file exists, append `-2`, `-3`, etc.
+
+5. **Add Frontmatter** — Include standard fields plus `merge_sources` array:
+   ```yaml
+   ---
+   title: "<Stem1> + <Stem2> - Merged Implementation Plan"
+   type: feat
+   date: YYYY-MM-DD
+   status: ready
+   merge_sources:
+     - <path1>
+     - <path2>
+     - <path3>
+   ---
+   ```
+
+6. **Save to specs/** — Write the merged plan to `specs/<generated-filename>.md`
+
+7. **Report** — Use the Multi-Doc Merge Report format (see Report section below)
+
+##### Multi-Doc Merge Rules
+
+1. **Preserve All Details**: Don't summarize or simplify — keep all technical specs from all inputs
+2. **Renumber Tasks Sequentially**: Tasks from input 1 become tasks 1-N, input 2 becomes N+1 to M, etc. Remap any dependency references to use new numbering
+3. **Group by Source**: Tasks from the same source document stay grouped together as a section or phase
+4. **Deduplicate Team Members**: If multiple inputs define the same team member name, merge their responsibilities into one entry
+5. **Combine Acceptance Criteria**: Union of all criteria from all inputs, deduplicated, organized by category (functional, non-functional, quality gates)
+6. **Merge Relevant Files**: Union of all file references from all inputs, deduplicated
+7. **Resolve Frontmatter**: Use the latest date across inputs, combine titles with `+`, use the most specific type (feat > enhancement > chore)
+8. **Honor Orchestration**: If `ORCHESTRATION_PROMPT` is provided, it takes priority for resolving any conflicts between inputs
+
+##### Multi-Doc Input Validation Error Report
+
+If any input files fail validation:
+
+```
+Input Validation Failed
+
+The following files could not be processed:
+- <path1>: File not found
+- <path2>: File is empty
+- <path3>: Not a markdown file (.md)
+
+Please fix the issues and try again.
+All input files must exist, be non-empty, and have a .md extension.
+```
 
 ### BMad Mode (Convert BMad Output)
 
@@ -565,13 +650,26 @@ TaskOutput({
 
 ### Accept Mode Workflow
 
-1. **Detect Mode** - First argument starts with `--accept` or `-a`
+#### Single-Doc Accept (ACCEPT_MODE is "single")
+
+1. **Detect Mode** - First argument starts with `--accept` or `-a`, no commas in path
 2. **Extract Path** - Get the path to existing plan
 3. **Read Plan** - Read the entire existing plan document
 4. **Validate Sections** - Check for required sections
 5. **Update Frontmatter** - Ensure proper YAML frontmatter
 6. **Copy to specs/** - Write validated plan to specs directory
-7. **Report** - Provide summary
+7. **Report** - Provide Accept Mode Report
+
+#### Multi-Doc Merge (ACCEPT_MODE is "multi")
+
+1. **Detect Mode** - First argument starts with `--accept` or `-a`, path contains commas
+2. **Validate Inputs** - Check each path exists, is non-empty, and has `.md` extension
+3. **Read All Documents** - Read each input file completely
+4. **Merge Documents** - Apply Multi-Doc Merge Rules to synthesize one unified spec
+5. **Generate Filename** - Auto-generate from input filenames with `-merged.md` suffix
+6. **Add Frontmatter** - Include `merge_sources` array for traceability
+7. **Save to specs/** - Write merged plan
+8. **Report** - Provide Multi-Doc Merge Report
 
 ### BMad Mode Workflow
 
@@ -632,6 +730,32 @@ Validation:
 
 When you're ready, execute the plan by running:
 /build specs/<filename>.md
+```
+
+### Multi-Doc Merge Report
+
+```
+✅ Specs Merged
+
+Sources:
+- <path1> (<N> tasks, <M> criteria)
+- <path2> (<N> tasks, <M> criteria)
+- <path3> (<N> tasks, <M> criteria)
+
+Destination: specs/<merged-filename>.md
+
+Merge Summary:
+Total Tasks: <N> (combined and renumbered)
+Team Members: <N> (deduplicated)
+Acceptance Criteria: <N> (combined)
+
+Merge Sources Recorded: ✅ (in frontmatter)
+
+Validation:
+✅ All required sections present
+
+When you're ready, execute the plan by running:
+/build specs/<merged-filename>.md
 ```
 
 ### BMad Mode Report
@@ -753,6 +877,15 @@ Based on user selection:
 
 # Accept with orchestration override
 /plan_w_team --accept docs/plans/oauth-plan.md "Use specific builder for API work"
+
+# Accept multiple plans and merge into one spec (comma-separated)
+/plan_w_team --accept docs/plans/backend-api.md,docs/plans/frontend-ui.md,docs/plans/shared-models.md
+
+# Short form with multiple plans
+/plan_w_team -a docs/plans/backend.md,docs/plans/frontend.md
+
+# Merge with orchestration guidance
+/plan_w_team --accept docs/plans/auth-backend.md,docs/plans/auth-frontend.md "Prioritize backend tasks. Use single fullstack agent."
 ```
 
 ### BMad Mode Examples
@@ -774,7 +907,7 @@ Based on user selection:
 ## Tips
 
 1. **Use BMad Mode** when you have BMad output to convert - preserves all technical details
-2. **Use Accept Mode** when you have existing planning documents to import
+2. **Use Accept Mode** when you have existing planning documents to import — use comma-separated paths to merge multiple docs into one spec
 3. **Use Create Mode** to generate plans from scratch based on your description
 4. **Validation** ensures plans have all required sections for execution
 5. **Orchestration Prompt** helps guide team composition and task structure
