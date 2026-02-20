@@ -71,6 +71,11 @@ function readStateFile(specPath) {
       state.build.teamName = null;
     }
 
+    // Backward compatibility: default missing ralph to null
+    if (state && !state.hasOwnProperty('ralph')) {
+      state.ralph = null;
+    }
+
     return state;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -172,7 +177,7 @@ function deleteStateFile(specPath) {
  * @param {object} partyOptions - Party mode options (topic, roster)
  * @returns {object} Initial state object
  */
-function createInitialState(specPath, tasks, mode = 'subagent', partyOptions = null) {
+function createInitialState(specPath, tasks, mode = 'subagent', partyOptions = null, ralphOptions = null) {
   const now = new Date().toISOString();
 
   // Party mode may not have a spec file yet (created during plan phase)
@@ -232,6 +237,12 @@ function createInitialState(specPath, tasks, mode = 'subagent', partyOptions = n
         constraints: []
       }
     };
+  }
+
+  // Add ralph-specific state
+  if (ralphOptions) {
+    const { createRalphState } = require('./ralph-loop');
+    state.ralph = createRalphState(ralphOptions);
   }
 
   return state;

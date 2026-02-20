@@ -43,6 +43,15 @@ Create detailed implementation plans with team coordination. Supports three mode
 
 **Multi-doc merge** reads all input files, applies AI-powered merge to combine tasks (renumbered), team members (deduplicated), acceptance criteria (combined), and relevant files (deduplicated) into a single unified spec. The merged output includes `merge_sources` in frontmatter for traceability.
 
+**Ralph flags:**
+- `--ralph` — Auto-start build with ralph loop after planning completes (skips handoff question).
+- `--max-iterations N` — Set max iterations for the auto-started build.
+
+```bash
+/plan_w_team "Add authentication" --ralph
+/plan_w_team --accept docs/plans/my-plan.md --ralph --max-iterations 10
+```
+
 ### `/plan`
 
 Quick planning mode for simpler features.
@@ -145,6 +154,10 @@ Execute a plan with multi-agent coordination.
 - `--fresh` - Start over from beginning, ignoring previous state
 - `--phase N` - Start from specific phase
 - `--from-task NAME` - Continue from a specific task
+- `--ralph` — Enable ralph loop mode. Iterates build→validate until all validation passes or max iterations reached.
+- `--max-iterations N` — Set maximum ralph iterations (default: 5, max: 50). Safety limit to prevent infinite loops.
+- `--self-heal` — Enable self-healing mode. Auto-retries failed tasks up to 3 times per task before marking as "stuck".
+- `--completion-promise TEXT` — Exit ralph loop when `<promise>TEXT</promise>` is detected in output.
 
 **What it does:**
 1. Parses the plan document
@@ -168,6 +181,14 @@ Execute a plan with multi-agent coordination.
 **Prerequisites for `--team`:**
 ```bash
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+```
+
+**Ralph loop examples:**
+```bash
+/build specs/feature.md --ralph
+/build specs/feature.md --ralph --max-iterations 10
+/build specs/feature.md --ralph --self-heal
+/build specs/feature.md --team --ralph
 ```
 
 **Example output:**
@@ -239,6 +260,21 @@ Resume the entire build workflow from a spec file.
 - `--dry-run` - Show what would be done without executing
 - `--from-task N` - Start from specific task N
 - `--restart` - Ignore completed tasks, start fresh
+- `--max-iterations N` — Overrides the saved ralph max iterations value on resume
+
+**Ralph awareness:** `/continue-spec` detects ralph loop state on resume:
+- If max iterations exhausted: offers to restart, resume without ralph, or increase max
+- If aborted: offers to resume ralph or continue manually
+
+### /ralph-stop
+
+Cancel an active ralph loop gracefully.
+
+**Usage:** `/ralph-stop`
+
+Scans for active ralph loops in `.claude/specs/*/state.json`, marks them as aborted, and creates a `.claude/ralph-abort` sentinel file. The Stop hook detects this sentinel and allows the session to exit normally.
+
+After cancelling, use `/continue-spec` to resume work without ralph mode, or `/build --ralph` to start a fresh loop.
 
 ## Monitoring Commands
 
@@ -247,6 +283,8 @@ Resume the entire build workflow from a spec file.
 Show status of all tasks and running agents.
 
 **Team mode awareness:** When a team-mode build is active, `/status` reads the team config and displays a teammate table with names, agent types, current tasks, and status.
+
+**Ralph loop awareness:** Now displays ralph loop iteration status when a ralph loop is active, completed, failed, or aborted.
 
 **Usage:**
 ```bash

@@ -12,7 +12,7 @@
     {
       "name": "tactical-engineering",
       "description": "Multi-agent orchestration workflow for Claude Code implementing the Compound Engineering pattern.",
-      "version": "0.2.0",
+      "version": "0.4.0",
       "author": { "name": "fitrakacamarga" },
       "homepage": "https://github.com/rebekz/tactical-engineering-plugin",
       "tags": ["orchestration", "multi-agent", "compound-engineering", "workflow"],

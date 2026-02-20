@@ -31,3 +31,4 @@ build/
 # Node
 node_modules/
 logs/
+trees/

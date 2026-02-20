@@ -1,7 +1,7 @@
 ---
 name: plan_w_team
 description: Creates a detailed engineering implementation plan based on user requirements, accepts an existing plan document, or converts BMad output documents. Saves to specs directory.
-argument-hint: [user prompt or --accept <path>[,<path>,...] or --bmad <bmad-output-path>] [orchestration prompt]
+argument-hint: [user-prompt | --accept path[,path2,...] | --bmad path] [orchestration-prompt] [--ralph [--max-iterations N]]
 model: opus
 disallowed-tools: Task, EnterPlanMode
 allowed-tools: AskUserQuestion, Bash, Glob, Grep, Read, Write, Edit, WebFetch, WebSearch, TaskOutput
@@ -78,6 +78,25 @@ if ($1.startsWith("--bmad")) {
   MODE = "create"
   USER_PROMPT = $1
   ORCHESTRATION_PROMPT = $2
+}
+```
+
+### Ralph Flag Detection
+
+Parse ralph flags from the arguments (applies to all modes):
+
+```typescript
+const RALPH_MODE = arguments.includes('--ralph')
+const MAX_ITERATIONS = (() => {
+  const idx = arguments.indexOf('--max-iterations')
+  if (idx !== -1 && arguments[idx + 1]) {
+    return Math.min(Math.max(parseInt(arguments[idx + 1]), 1), 50)
+  }
+  return 5
+})()
+
+if (RALPH_MODE) {
+  console.log(`Ralph mode: will auto-start build with max ${MAX_ITERATIONS} iterations after planning`)
 }
 ```
 
@@ -641,12 +660,19 @@ TaskOutput({
 
 1. **Analyze Requirements** - Parse the USER_PROMPT to understand the core problem and desired outcome
 2. **Understand Codebase** - Without subagents, directly understand existing patterns, architecture, and relevant files
-3. **Design Solution** - Develop technical approach including architecture decisions and implementation strategy
-4. **Define Team Members** - Use `ORCHESTRATION_PROMPT` (if provided) to guide team composition. Document in plan
-5. **Define Step by Step Tasks** - Use `ORCHESTRATION_PROMPT` (if provided) to guide task granularity and parallel/sequential structure. Document in plan
-6. **Generate Filename** - Create a descriptive kebab-case filename based on the plan's main topic
-7. **Save Plan** - Write the plan to `specs/<filename>.md`
-8. **Report** - Provide a summary of key components
+3. **Review Past Learnings** - Check for relevant knowledge from past builds:
+   - Read `docs/planning-patterns.md` if it exists — note relevant planning preferences
+   - Scan `docs/adr/` for architecture decisions that may apply to this feature
+   - Scan `docs/solutions/` for known pitfalls related to this domain
+   - Apply only what's relevant. Ignore patterns that don't apply to the current feature
+   - When a pattern is applied, cite its source in the plan (e.g., "Based on ADR-003" or "Per planning pattern: always include QA")
+   - If none of these files/directories exist or contain relevant content, skip silently
+4. **Design Solution** - Develop technical approach including architecture decisions and implementation strategy
+5. **Define Team Members** - Use `ORCHESTRATION_PROMPT` (if provided) to guide team composition. Document in plan
+6. **Define Step by Step Tasks** - Use `ORCHESTRATION_PROMPT` (if provided) to guide task granularity and parallel/sequential structure. Document in plan
+7. **Generate Filename** - Create a descriptive kebab-case filename based on the plan's main topic
+8. **Save Plan** - Write the plan to `specs/<filename>.md`
+9. **Report** - Provide a summary of key components
 
 ### Accept Mode Workflow
 
@@ -706,8 +732,9 @@ Team members:
 - <member 1>: <role>
 - <member 2>: <role>
 
-When you're ready, execute the plan by running:
-/build specs/<filename>.md
+Learnings Applied:
+- <pattern or ADR applied> (source: <docs/planning-patterns.md | docs/adr/xxx.md>)
+- (or "No relevant past learnings found" if none applied)
 ```
 
 ### Accept Mode Report
@@ -727,9 +754,6 @@ Team Members: <N> members
 
 Validation:
 ✅ All required sections present
-
-When you're ready, execute the plan by running:
-/build specs/<filename>.md
 ```
 
 ### Multi-Doc Merge Report
@@ -753,9 +777,6 @@ Merge Sources Recorded: ✅ (in frontmatter)
 
 Validation:
 ✅ All required sections present
-
-When you're ready, execute the plan by running:
-/build specs/<merged-filename>.md
 ```
 
 ### BMad Mode Report
@@ -780,9 +801,6 @@ Acceptance Criteria: <K> criteria
 
 Tech Stack:
 <from architecture tech stack>
-
-When you're ready, execute the plan by running:
-/build specs/<product-name>.md
 ```
 
 ### Validation Warning Report
@@ -807,31 +825,59 @@ Options:
 Would you like to proceed anyway? (y/n)
 ```
 
+## Team Signal Detection
+
+Before presenting the handoff, scan the generated spec content for team member definitions.
+
+Check the content under `### Team Members` for any of these patterns:
+- Subheadings: lines starting with `####` (e.g., `#### Go Backend Builder`)
+- Name fields: lines containing `- **Name:**` followed by a value
+- Agent Type fields: lines containing `- **Agent Type:**` followed by a value
+- Table rows: lines with `|` containing agent type values (not the header separator `|---|`)
+
+If ANY pattern matches, set HAS_TEAM_SIGNALS = true.
+
+**Important:** The `### Team Members` heading itself is a required part of every spec template. Its mere presence does NOT indicate team mode. Only the patterns above (which indicate actual member definitions) should trigger detection.
+
+Also check environment: AGENT_TEAMS_ENABLED = (process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1')
+
 ## Handoff
 
-After creating, importing, or converting the plan, use `AskUserQuestion` to present next steps:
+### Ralph Auto-Handoff
+
+When `RALPH_MODE` is enabled, skip the handoff question and auto-start build:
+
+```typescript
+if (RALPH_MODE) {
+  console.log(`Ralph mode: auto-starting build with max ${MAX_ITERATIONS} iterations`)
+  // Auto-invoke /build with ralph flags
+  // Equivalent to: /build specs/<filename>.md --ralph --max-iterations N
+  Skill({ skill: "tactical-engineering:build", args: `specs/${filename}.md --ralph --max-iterations ${MAX_ITERATIONS}` })
+  return // Skip the AskUserQuestion below
+}
+```
+
+When `RALPH_MODE` is NOT enabled, fall through to the existing handoff below.
+
+After presenting the report, run a two-part handoff.
+
+### Part A: Capture Planning Patterns
+
+This fires after EVERY plan creation (all modes: Create, Accept, Multi-Doc Merge, BMad):
 
 ```typescript
 AskUserQuestion({
   questions: [{
-    question: "Plan with team captured. What would you like to do next?",
-    header: "Next Steps",
+    question: "Any planning patterns to remember for future plans? (e.g., 'Always include QA with real data tests', 'Use 3-agent team for small features')",
+    header: "Patterns",
     options: [
       {
-        label: "Proceed to build",
-        description: "Run /build to execute the plan with multi-agent coordination (auto-detects the created spec)"
+        label: "No patterns to save",
+        description: "Proceed without capturing any planning patterns"
       },
       {
-        label: "Refine orchestration",
-        description: "Continue exploring and refine the team orchestration plan further"
-      },
-      {
-        label: "Review plan",
-        description: "Open and review the generated plan document before proceeding"
-      },
-      {
-        label: "Done for now",
-        description: "Return later - the plan is saved in specs/ and ready when you are"
+        label: "Yes, save a pattern",
+        description: "I'll describe a pattern to remember for future /plan_w_team runs"
       }
     ],
     multiSelect: false
@@ -839,14 +885,111 @@ AskUserQuestion({
 })
 ```
 
-### Handoff Behavior
+If user selects "Yes, save a pattern":
+1. Ask for a description of the pattern
+2. Categorize it into one of: Team Composition, Testing Strategy, Architecture Patterns, Workflow Preferences
+3. Append to `docs/planning-patterns.md` under the appropriate category heading using this format:
+   ```
+   ### <Pattern Title>
+   <Description>
+   - **When to apply:** <inferred condition>
+   - **Source:** User preference, captured <date>
+   ```
+4. Confirm: "Pattern saved to docs/planning-patterns.md under <category>"
 
-Based on user selection:
+Then proceed to Part B.
 
-- **"Proceed to build"**: Automatically run `/build specs/<filename>.md` to start execution
-- **"Refine orchestration"**: Continue in planning mode to adjust team composition, task dependencies, or approach
-- **"Review plan"**: Open the plan file for review
-- **"Done for now"**: Provide summary and exit
+### Part B: Conditional Build Handoff
+
+**If HAS_TEAM_SIGNALS is true**, present 5 options:
+
+```typescript
+// Determine team build instructions based on env var
+const teamBuildOption = AGENT_TEAMS_ENABLED
+  ? {
+      label: "Build with --team (Recommended)",
+      description: "Run /build specs/<filename>.md --team — teammates communicate directly and self-claim tasks"
+    }
+  : {
+      label: "Build with --team",
+      description: "Requires setup: export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, restart Claude Code, then run /build specs/<filename>.md --team"
+    }
+
+AskUserQuestion({
+  questions: [{
+    question: "This plan includes team member definitions. How would you like to proceed?",
+    header: "Next step",
+    options: [
+      teamBuildOption,
+      {
+        label: "Build with subagents",
+        description: "Run /build specs/<filename>.md — orchestrator deploys agents sequentially/parallel"
+      },
+      {
+        label: "Refine orchestration",
+        description: "Continue refining the plan before building"
+      },
+      {
+        label: "Review plan",
+        description: "Open the plan file for manual review"
+      }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+**If HAS_TEAM_SIGNALS is false**, present 4 options:
+
+```typescript
+AskUserQuestion({
+  questions: [{
+    question: "How would you like to proceed?",
+    header: "Next step",
+    options: [
+      {
+        label: "Proceed to build",
+        description: "Run /build specs/<filename>.md to execute the plan"
+      },
+      {
+        label: "Refine orchestration",
+        description: "Continue refining the plan before building"
+      },
+      {
+        label: "Review plan",
+        description: "Open the plan file for manual review"
+      },
+      {
+        label: "Done for now",
+        description: "Save the plan and exit — build later with /build"
+      }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+## Handoff Behavior
+
+Handle each option:
+
+- **"Build with --team"** (team signals, env var set): Auto-run `/build specs/<filename>.md --team`
+- **"Build with --team"** (team signals, env var NOT set): Display setup instructions:
+  ```
+  To use Agent Teams mode:
+  1. Export the experimental flag: export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+  2. Restart Claude Code
+  3. Run: /build specs/<filename>.md --team
+  ```
+- **"Build with subagents"**: Auto-run `/build specs/<filename>.md`
+- **"Proceed to build"** (no team signals): Auto-run `/build specs/<filename>.md`
+- **"Refine orchestration"**: Continue the conversation — ask what the user wants to change
+- **"Review plan"**: Display the plan file path and suggest opening it
+- **"Done for now"**: Summarize what was created and exit with:
+  ```
+  Plan saved. When you're ready to build, run:
+  /build specs/<filename>.md
+  ```
 
 ## Examples
 
@@ -902,6 +1045,19 @@ Based on user selection:
 
 # Convert from different project
 /plan_w_team --bmad ~/project/self/bmad-new/other-project/_bmad_output/planning-artifacts
+```
+
+### Ralph Mode Examples
+
+```bash
+# Full lifecycle with ralph — plan then auto-build with iteration
+/plan_w_team "Add user authentication" --ralph
+
+# Custom max iterations for auto-build
+/plan_w_team "Build real-time chat" --ralph --max-iterations 10
+
+# Accept plan and auto-build with ralph
+/plan_w_team --accept docs/plans/my-plan.md --ralph
 ```
 
 ## Tips
