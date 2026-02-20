@@ -1,7 +1,7 @@
 ---
 name: continue-spec
 description: Resume work from a spec file by detecting completed/in-progress/pending tasks and continuing from where work stopped. Use after /build is interrupted.
-argument-hint: <path-to-spec> [options]
+argument-hint: <path-to-spec> [options] [--max-iterations N]
 model: opus
 allowed-tools: Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage, Bash, Glob, Grep, Read, Edit, Write, AskUserQuestion, Skill
 ---
@@ -126,6 +126,96 @@ if (state) {
 - State file includes agentId mappings for resume capability
 - State file has checksum for spec modification detection
 - TaskList fallback ensures compatibility with in-progress builds
+
+### Ralph State Detection
+
+After loading the state file, check for ralph loop state:
+
+```typescript
+if (state.ralph && state.ralph.active) {
+  console.log(`Ralph loop detected: iteration ${state.ralph.currentIteration}/${state.ralph.maxIterations}`)
+  console.log(`  Mode: ${state.ralph.mode}`)
+  console.log(`  Status: ${state.ralph.status}`)
+  console.log(`  Self-heal: ${state.ralph.selfHeal ? 'enabled' : 'disabled'}`)
+}
+```
+
+**Handle ralph statuses:**
+
+If `state.ralph` exists:
+
+1. **Status: 'failed'** (max iterations exhausted):
+   ```typescript
+   if (state.ralph.status === 'failed') {
+     const action = await AskUserQuestion({
+       question: `Previous ralph loop exhausted max iterations (${state.ralph.currentIteration}/${state.ralph.maxIterations}). What would you like to do?`,
+       options: [
+         { label: "Start new ralph loop", description: "Reset iteration counter, keep completed task state" },
+         { label: "Resume without ralph", description: "Continue in manual mode (no auto-iteration)" },
+         { label: "Increase max iterations", description: "Set new max and continue ralph loop" }
+       ]
+     })
+
+     switch (action) {
+       case "Start new ralph loop":
+         state.ralph.currentIteration = 0
+         state.ralph.status = 'active'
+         state.ralph.active = true
+         state.ralph.history = []
+         state.ralph.taskRetryCounters = {}
+         writeStateFile(specPath, state)
+         // Continue to build with ralph active
+         break
+       case "Resume without ralph":
+         state.ralph.active = false
+         state.ralph.status = 'disabled'
+         writeStateFile(specPath, state)
+         // Continue to build without ralph
+         break
+       case "Increase max iterations":
+         // Could parse --max-iterations from command line, or ask user
+         state.ralph.maxIterations = state.ralph.maxIterations + 5
+         state.ralph.status = 'active'
+         state.ralph.active = true
+         writeStateFile(specPath, state)
+         console.log(`Max iterations increased to ${state.ralph.maxIterations}`)
+         break
+     }
+   }
+   ```
+
+2. **Status: 'active' or 'paused'**:
+   ```typescript
+   if (state.ralph.status === 'active') {
+     console.log(`Resuming ralph loop from iteration ${state.ralph.currentIteration} (max: ${state.ralph.maxIterations})`)
+     // Continue to build with ralph state preserved
+   }
+   ```
+
+3. **Status: 'aborted'**:
+   ```typescript
+   if (state.ralph.status === 'aborted') {
+     const action = await AskUserQuestion({
+       question: `Previous ralph loop was aborted at iteration ${state.ralph.currentIteration}/${state.ralph.maxIterations}. What would you like to do?`,
+       options: [
+         { label: "Resume ralph loop", description: "Continue from where it stopped" },
+         { label: "Resume without ralph", description: "Continue in manual mode" }
+       ]
+     })
+
+     if (action === "Resume ralph loop") {
+       state.ralph.status = 'active'
+       state.ralph.active = true
+       writeStateFile(specPath, state)
+     } else {
+       state.ralph.active = false
+       state.ralph.status = 'disabled'
+       writeStateFile(specPath, state)
+     }
+   }
+   ```
+
+**Parameter override:** If `--max-iterations N` is provided on the continue-spec command line, it overrides `state.ralph.maxIterations`.
 
 ### Phase 1.5: Team Mode Detection
 

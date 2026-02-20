@@ -114,6 +114,51 @@ Key Decisions:
 - <decision 2>
 ```
 
+## Ralph Loop Status
+
+If the state file has a `ralph` field that is not null, display ralph loop information.
+
+Read the state file from `.claude/specs/<spec-name>/state.json` and check for `ralph` field.
+
+**When `ralph.active === true`:**
+
+```
+Ralph Loop: Active — iteration N/M
+  Mode: <build-validate|self-heal|full-lifecycle>
+  Self-heal: <enabled|disabled>
+  <If self-heal enabled and taskRetryCounters has entries:>
+    Retry counters: task X: A/3, task Y: B/3
+  Last validation: <from latest history entry, e.g. "5/7 passed">
+  Started: <ralph.startedAt formatted>
+```
+
+**When `ralph.status === 'completed'`:**
+
+```
+Ralph Loop: Completed — N iterations
+  Mode: <mode>
+  Result: All validation passed
+  Duration: <calculated from startedAt to last history entry>
+```
+
+**When `ralph.status === 'failed'`:**
+
+```
+Ralph Loop: Failed — max iterations reached (N/M)
+  Mode: <mode>
+  Last validation: <from latest history entry>
+  Report: .claude/specs/<name>/ralph-report.md
+```
+
+**When `ralph.status === 'aborted'`:**
+
+```
+Ralph Loop: Aborted at iteration N/M
+  Use /continue-spec to resume
+```
+
+**When `ralph` is null:** Don't show any ralph section.
+
 ## Workflow
 
 1. Call `TaskList({})` to get all tasks
@@ -123,6 +168,7 @@ Key Decisions:
 5. Read state file to detect build mode:
    - If team mode, read team config and show teammate table
    - If party mode, show phase progress, phase history, active agents, and key decisions
+6. Check state file for `ralph` field — if present and not null, display Ralph Loop Status
 
 ## Report
 
@@ -134,6 +180,7 @@ Provide a concise status report showing:
 - Blocked count
 - Build mode (subagent/team)
 - Teammate names and assignments (if team mode)
+- Ralph loop status (if active or completed/failed/aborted)
 
 ## Examples
 

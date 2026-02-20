@@ -1,7 +1,7 @@
 ---
 name: build
 description: Execute a plan document from specs/ directory with multi-agent coordination. Use after planning to implement the feature.
-argument-hint: [path-to-plan] [--team]
+argument-hint: [path-to-plan] [--team] [--ralph [--max-iterations N] [--self-heal] [--completion-promise TEXT]]
 model: opus
 allowed-tools: Task, TaskOutput, Bash, Glob, Grep, Read, Edit, Write, NotebookEdit, WebFetch, WebSearch, AskUserQuestion, Skill, TodoWrite, TeamCreate, TeamDelete, SendMessage
 ---
@@ -47,6 +47,35 @@ if (TEAM_MODE) {
 } else {
   console.log("Mode: Subagents (default)")
 }
+
+// Ralph mode detection
+const RALPH_MODE = arguments.includes('--ralph')
+const MAX_ITERATIONS = (() => {
+  const idx = arguments.indexOf('--max-iterations')
+  if (idx !== -1 && arguments[idx + 1]) {
+    const n = parseInt(arguments[idx + 1])
+    return Math.min(Math.max(n, 1), 50) // Clamp between 1-50
+  }
+  return 5 // Default
+})()
+const SELF_HEAL = arguments.includes('--self-heal')
+const COMPLETION_PROMISE = (() => {
+  const idx = arguments.indexOf('--completion-promise')
+  if (idx !== -1 && arguments[idx + 1]) {
+    return arguments[idx + 1]
+  }
+  return null
+})()
+
+if (RALPH_MODE) {
+  console.log("Ralph Mode: Enabled")
+  console.log(`  Max iterations: ${MAX_ITERATIONS}`)
+  console.log(`  Self-heal: ${SELF_HEAL ? 'enabled' : 'disabled'}`)
+  console.log(`  Completion promise: ${COMPLETION_PROMISE || 'none'}`)
+  if (MAX_ITERATIONS === 5) {
+    console.log("  (Default max iterations. Use --max-iterations N to change.)")
+  }
+}
 ```
 
 ### Execution Strategy
@@ -76,6 +105,15 @@ Your role is ORCHESTRATION, not IMPLEMENTATION. Use agents to do the actual work
 Before starting, check for existing state from a previous build:
 
 ```typescript
+// Clean up stale abort sentinel from previous session
+if (RALPH_MODE) {
+  const abortFile = '.claude/ralph-abort'
+  if (fs.existsSync(abortFile)) {
+    fs.unlinkSync(abortFile)
+    console.log("Cleaned up stale ralph-abort sentinel from previous session")
+  }
+}
+
 // Load state file helper functions
 // Note: These functions are available in scripts/state-file.js
 
@@ -197,7 +235,14 @@ for (const taskDef of parsedTasks) {
 
 // Create initial state file using createInitialState helper
 const mode = TEAM_MODE ? 'team' : 'subagent'
-const state = createInitialState(PATH_TO_PLAN, tasks, mode)
+const state = createInitialState(PATH_TO_PLAN, tasks, mode, null,
+  RALPH_MODE ? {
+    maxIterations: MAX_ITERATIONS,
+    selfHeal: SELF_HEAL,
+    completionPromise: COMPLETION_PROMISE,
+    mode: SELF_HEAL ? 'self-heal' : 'build-validate'
+  } : null
+)
 
 writeStateFile(PATH_TO_PLAN, state)
 console.log(`✓ State saved (${mode} mode) to .claude/specs/${sanitizeSpecName(PATH_TO_PLAN)}/state.json`)
@@ -412,6 +457,33 @@ for (const task of unblockedTasks) {
 
 ##### Step 5: Shutdown & Cleanup
 
+#### Ralph Mode Team Persistence
+
+When ralph mode is active in team mode, suppress team cleanup to preserve teammates across iterations:
+
+```typescript
+// Check if ralph mode is active before team cleanup
+if (RALPH_MODE) {
+  const state = readStateFile(PATH_TO_PLAN)
+  if (state.ralph && state.ralph.active) {
+    console.log("Ralph mode active — keeping team alive for next iteration")
+    // Skip shutdown and TeamDelete
+    // The Stop hook will handle iteration decisions
+    // Team persists across ralph iterations
+
+    // Only update state, don't tear down
+    state.build.lastUpdated = new Date().toISOString()
+    writeStateFile(PATH_TO_PLAN, state)
+
+    // Skip to Phase 7 (Validation) — the stop hook decides whether to continue
+    // Do NOT proceed with Step 5 shutdown below
+    return // Exit team cleanup section
+  }
+}
+
+// If ralph is NOT active (or ralph completed/failed/aborted), proceed with normal shutdown:
+```
+
 ```typescript
 // After all tasks complete (or on abort):
 
@@ -525,7 +597,45 @@ if (hooks && hooks.stop && hooks.stop.length > 0) {
     console.error(`❌ Validation failed:`)
     validationResults.errors.forEach(err => console.error(`  - ${err}`))
 
-    // Ask user what to do
+    // --- Self-Heal Mode (Ralph) ---
+    // When RALPH_MODE and SELF_HEAL are both active, bypass user prompt and auto-retry
+    if (RALPH_MODE && SELF_HEAL) {
+      const state = readStateFile(PATH_TO_PLAN)
+      const ralph = state.ralph
+      const retryCount = ralph.taskRetryCounters[taskId] || 0
+
+      if (retryCount < 3) {
+        // Increment retry counter
+        ralph.taskRetryCounters[taskId] = retryCount + 1
+        writeStateFile(PATH_TO_PLAN, state)
+
+        console.log(`Self-heal: retrying task ${taskId} (attempt ${retryCount + 1}/3)`)
+        console.log(`  Failures: ${validationResults.errors.join(', ')}`)
+
+        // Resume agent with error context
+        const retryResult = await Task({
+          description: `Retry: ${task.subject}`,
+          prompt: `Previous attempt failed validation. Fix these issues and try again:\n${validationResults.errors.map(e => `- ${e}`).join('\n')}\n\nOriginal task: ${task.description}`,
+          subagent_type: task.agentType,
+          resume: result.agentId
+        })
+
+        // Re-run validation after retry
+        // (loop back to validation check)
+        continue // retry validation
+      } else {
+        // Max retries reached - mark as stuck
+        console.log(`Task ${taskId} stuck after 3 retries. Moving to next task.`)
+        await TaskUpdate({ taskId: taskId, status: "completed" }) // Mark to unblock dependents
+        updateTaskInState(PATH_TO_PLAN, taskId, {
+          status: "stuck",
+          lastOutput: `Stuck after 3 retries. Last errors: ${validationResults.errors.join(', ')}`
+        })
+        continue // move to next task
+      }
+    }
+
+    // Normal mode: ask user (existing AskUserQuestion block follows)
     const action = await AskUserQuestion({
       question: `Task "${task.subject}" validation failed. What should we do?`,
       options: [
@@ -591,6 +701,55 @@ updateTaskInState(PATH_TO_PLAN, taskId, {
 })
 ```
 
+#### Self-Heal Mode (Ralph)
+
+When `RALPH_MODE` and `SELF_HEAL` are both active and a task fails validation, bypass the user prompt and auto-retry:
+
+```typescript
+if (RALPH_MODE && SELF_HEAL && validationResults.failed > 0) {
+  // Self-heal: auto-retry instead of asking user
+  const state = readStateFile(PATH_TO_PLAN)
+  const ralph = state.ralph
+  const retryCount = ralph.taskRetryCounters[taskId] || 0
+
+  if (retryCount < 3) {
+    // Increment retry counter
+    ralph.taskRetryCounters[taskId] = retryCount + 1
+    writeStateFile(PATH_TO_PLAN, state)
+
+    console.log(`Self-heal: retrying task ${taskId} (attempt ${retryCount + 1}/3)`)
+    console.log(`  Failures: ${validationResults.errors.join(', ')}`)
+
+    // Resume agent with error context
+    const retryResult = await Task({
+      description: `Retry: ${task.subject}`,
+      prompt: `Previous attempt failed validation. Fix these issues and try again:\n${validationResults.errors.map(e => `- ${e}`).join('\n')}\n\nOriginal task: ${task.description}`,
+      subagent_type: task.agentType,
+      resume: result.agentId
+    })
+
+    // Re-run validation after retry
+    // (loop back to validation check)
+    continue // retry validation
+  } else {
+    // Max retries reached - mark as stuck
+    console.log(`Task ${taskId} stuck after 3 retries. Moving to next task.`)
+    await TaskUpdate({ taskId: taskId, status: "completed" }) // Mark to unblock dependents
+    updateTaskInState(PATH_TO_PLAN, taskId, {
+      status: "stuck",
+      lastOutput: `Stuck after 3 retries. Last errors: ${validationResults.errors.join(', ')}`
+    })
+    continue // move to next task
+  }
+}
+
+// Normal mode: ask user (existing AskUserQuestion block follows)
+```
+
+Add this BEFORE the existing `AskUserQuestion` block for validation failures. The existing user-prompt behavior remains unchanged for non-ralph/non-self-heal mode.
+
+**Note:** Per-task retry counters (`ralph.taskRetryCounters`) reset to 0 at the start of each new ralph iteration. This gives each task fresh retry attempts on each loop cycle.
+
 **Hook Format in Spec:**
 
 Tasks can define validation hooks using YAML:
@@ -633,6 +792,55 @@ Hooks can specify `on_failure`:
 - `fail` (default): Stop running more hooks, prompt user
 - `continue`: Run remaining hooks, report all failures at end
 - `retry`: Automatically retry the task (up to N times)
+
+### Phase 5.6: Ralph Inter-Iteration Status (Ralph Mode Only)
+
+When ralph mode is active, display iteration progress after each build cycle completes. This information helps the user (and the continuation prompt) understand where things stand.
+
+When the Stop hook sends a continuation prompt back, display the current iteration status before resuming work:
+
+```
+Ralph Loop — Iteration N/M
+  Completed: X/Y tasks
+  Failed: <list of failed task names>
+  Stuck: <list of stuck task names, if self-heal>
+  Validation: <summary from latest history entry>
+  <if self-heal> Retry counters: task X: A/3, task Y: B/3
+  Continuing...
+```
+
+This information is read from the state file's `ralph.history` array (latest entry) and `ralph.taskRetryCounters`.
+
+On completion (ralph loop finished successfully):
+```
+Ralph Loop Complete!
+  Iterations: N
+  Duration: Xm Ys
+  All validation passed
+```
+
+On failure (max iterations reached):
+```
+Ralph Loop Failed — max iterations reached (N/M)
+  Report saved to: .claude/specs/<name>/ralph-report.md
+  Review the report and consider:
+    - Fixing failures manually, then /continue-spec
+    - Running with --self-heal for auto-retries
+    - Increasing --max-iterations
+```
+
+### Ralph Abort Mechanism
+
+If the user says "stop ralph", "abort ralph", or "cancel ralph" during a build:
+
+1. Create sentinel file `.claude/ralph-abort`
+2. Print: "Ralph abort requested. Will stop after current operation completes."
+3. Exit normally — the Stop hook detects the sentinel file and allows exit
+
+The Stop hook's abort handling:
+- Checks for `.claude/ralph-abort` at the start of each hook invocation
+- If found: removes the sentinel, sets `ralph.status = 'aborted'` and `ralph.active = false`, exits 0 (allows session exit)
+- The user can then run `/continue-spec` to resume without ralph, or `/ralph-stop` for explicit cancellation
 
 ### Phase 7: Validation
 
@@ -933,6 +1141,39 @@ Teammates:
 Team resources cleaned up.
 ```
 
+### Ralph Team Cleanup (Team Mode + Ralph Complete)
+
+When the ralph loop has completed (status: 'completed', 'failed', or 'aborted') AND team mode was used, perform final cleanup:
+
+```typescript
+const state = readStateFile(PATH_TO_PLAN)
+if (TEAM_MODE && state.ralph && !state.ralph.active) {
+  console.log("Ralph loop complete — cleaning up team resources")
+
+  // 1. Send shutdown_request to all teammates
+  for (const member of teamMembers) {
+    SendMessage({
+      type: "shutdown_request",
+      recipient: member.name,
+      content: "Ralph loop complete. Shutting down."
+    })
+  }
+
+  // 2. Wait briefly for acknowledgments (30s timeout)
+  // Teammates respond with shutdown_response { approve: true }
+
+  // 3. Clean up team resources
+  TeamDelete()
+
+  // 4. Update state file
+  state.build.completedAt = new Date().toISOString()
+  state.build.lastUpdated = new Date().toISOString()
+  writeStateFile(PATH_TO_PLAN, state)
+
+  console.log("Team resources cleaned up")
+}
+```
+
 ## Report Format
 
 After completing the build, provide a concise report following the Completion Report format above.
@@ -958,6 +1199,28 @@ After completing the build, provide a concise report following the Completion Re
 
 # Continue from specific task
 /build specs/conversational-ui-revamp.md --from-task setup-database
+```
+
+### Ralph Mode Examples
+
+```bash
+# Ralph mode — iterate build→validate until success
+/build specs/user-auth.md --ralph
+
+# Custom max iterations (default is 5)
+/build specs/user-auth.md --ralph --max-iterations 10
+
+# Self-healing — auto-retry failed tasks up to 3 times each
+/build specs/user-auth.md --ralph --self-heal
+
+# Ralph with team mode — team persists across iterations
+/build specs/user-auth.md --team --ralph
+
+# Completion promise — exit when specific text appears
+/build specs/user-auth.md --ralph --completion-promise "all tests passing"
+
+# Kitchen sink
+/build specs/complex-feature.md --team --ralph --self-heal --max-iterations 15
 ```
 
 ## Tips
