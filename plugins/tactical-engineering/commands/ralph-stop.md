@@ -1,4 +1,5 @@
 ---
+name: ralph-stop
 description: Cancel an active ralph loop gracefully
 argument-hint:
 model: opus

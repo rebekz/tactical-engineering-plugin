@@ -8,7 +8,8 @@
 #   stdout: { "decision": "block", "reason": "...", "systemMessage": "..." }  to BLOCK exit
 #   stdout: (empty) + exit 0  to ALLOW exit
 
-set -e
+# Always allow exit on unexpected errors — never trap the user
+trap 'exit 0' ERR
 
 # ---------------------------------------------------------------------------
 # 1. Read hook input from stdin
@@ -34,6 +35,18 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 PROJECT_ROOT="$(pwd)"
 
 # ---------------------------------------------------------------------------
+# 3a. Validate paths contain only safe characters
+# ---------------------------------------------------------------------------
+if [[ ! "$PLUGIN_ROOT" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+  echo "Ralph stop-hook: unsafe PLUGIN_ROOT path, allowing exit" >&2
+  exit 0
+fi
+if [[ ! "$PROJECT_ROOT" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+  echo "Ralph stop-hook: unsafe PROJECT_ROOT path, allowing exit" >&2
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Find active ralph state
 #    Scan $PROJECT_ROOT/.claude/specs/*/state.json for ralph.active === true.
 #    Exports SPEC_PATH (the build.specPath from the state) and STATE_DIR.
@@ -41,8 +54,8 @@ PROJECT_ROOT="$(pwd)"
 ACTIVE_STATE=$(node -e "
   const fs = require('fs');
   const path = require('path');
-  const glob = path.join('${PROJECT_ROOT}', '.claude', 'specs', '*', 'state.json');
-  const specsDir = path.join('${PROJECT_ROOT}', '.claude', 'specs');
+  const projectRoot = process.argv[1];
+  const specsDir = path.join(projectRoot, '.claude', 'specs');
 
   if (!fs.existsSync(specsDir)) { process.exit(0); }
 
@@ -64,7 +77,7 @@ ACTIVE_STATE=$(node -e "
     } catch(e) { /* skip corrupted files */ }
   }
   // No active ralph found — output nothing
-" 2>/dev/null || echo "")
+" "$PROJECT_ROOT" 2>/dev/null || echo "")
 
 if [[ -z "$ACTIVE_STATE" ]]; then
   # No active ralph loop — allow normal exit
@@ -79,6 +92,12 @@ if [[ -z "$SPEC_PATH" ]] || [[ -z "$STATE_FILE" ]]; then
   exit 0
 fi
 
+# Validate SPEC_PATH contains only safe characters
+if [[ ! "$SPEC_PATH" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+  echo "Ralph stop-hook: unsafe SPEC_PATH, allowing exit" >&2
+  exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # 5. Check abort sentinel
 # ---------------------------------------------------------------------------
@@ -86,14 +105,16 @@ ABORT_FILE="${PROJECT_ROOT}/.claude/ralph-abort"
 if [[ -f "$ABORT_FILE" ]]; then
   rm -f "$ABORT_FILE"
   node -e "
-    const { readStateFile, writeStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-    const state = readStateFile('${SPEC_PATH}');
+    const pluginRoot = process.argv[1];
+    const specPath = process.argv[2];
+    const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
+    const state = readStateFile(specPath);
     if (state && state.ralph) {
       state.ralph.status = 'aborted';
       state.ralph.active = false;
-      writeStateFile('${SPEC_PATH}', state);
+      writeStateFile(specPath, state);
     }
-  " 2>/dev/null || echo "Ralph stop-hook: failed to update abort state" >&2
+  " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update abort state" >&2
   exit 0
 fi
 
@@ -101,11 +122,13 @@ fi
 # 6. Read current state via node (single source of truth)
 # ---------------------------------------------------------------------------
 STATE_JSON=$(node -e "
-  const { readStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-  const state = readStateFile('${SPEC_PATH}');
+  const pluginRoot = process.argv[1];
+  const specPath = process.argv[2];
+  const { readStateFile } = require(pluginRoot + '/scripts/state-file');
+  const state = readStateFile(specPath);
   if (!state) { process.exit(1); }
   console.log(JSON.stringify(state));
-" 2>/dev/null) || { echo "Ralph stop-hook: failed to read state file" >&2; exit 0; }
+" "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null) || { echo "Ralph stop-hook: failed to read state file" >&2; exit 0; }
 
 # ---------------------------------------------------------------------------
 # 7. Check max iterations
@@ -122,17 +145,19 @@ MAX_REACHED=$(node -e "
 
 if [[ "$MAX_REACHED" == "true" ]]; then
   node -e "
-    const { readStateFile, writeStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-    const { generateFailureReport, writeFailureReport } = require('${PLUGIN_ROOT}/scripts/ralph-loop');
-    const state = readStateFile('${SPEC_PATH}');
+    const pluginRoot = process.argv[1];
+    const specPath = process.argv[2];
+    const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
+    const { generateFailureReport, writeFailureReport } = require(pluginRoot + '/scripts/ralph-loop');
+    const state = readStateFile(specPath);
     if (state && state.ralph) {
       state.ralph.status = 'failed';
       state.ralph.active = false;
-      writeStateFile('${SPEC_PATH}', state);
+      writeStateFile(specPath, state);
       const report = generateFailureReport(state);
-      writeFailureReport('${SPEC_PATH}', report);
+      writeFailureReport(specPath, report);
     }
-  " 2>/dev/null || echo "Ralph stop-hook: failed to write failure report" >&2
+  " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to write failure report" >&2
   echo "Ralph loop: max iterations reached. See ralph-report.md for details." >&2
   exit 0
 fi
@@ -160,20 +185,21 @@ if [[ -n "$TRANSCRIPT_PATH" ]] && [[ -f "$TRANSCRIPT_PATH" ]]; then
     for (const line of tail) {
       try {
         const entry = JSON.parse(line);
-        if (entry.role !== 'assistant' || !entry.message || !entry.message.content) continue;
-        const texts = entry.message.content
-          .filter(c => c.type === 'text')
-          .map(c => c.text)
-          .join('\n');
+        if (entry.role === 'assistant' && entry.message && entry.message.content) {
+          const texts = entry.message.content
+            .filter(c => c.type === 'text')
+            .map(c => c.text)
+            .join('\n');
 
-        // Extract promise tags — use a regex that handles multiline
-        const match = texts.match(/<promise>([\s\S]*?)<\/promise>/);
-        if (match) {
-          const promiseText = match[1].trim().replace(/\s+/g, ' ');
-          const expected = r.completionPromise.trim().replace(/\s+/g, ' ');
-          if (promiseText === expected) {
-            console.log('matched');
-            process.exit(0);
+          // Extract promise tags — use a regex that handles multiline
+          const match = texts.match(/<promise>([\s\S]*?)<\/promise>/);
+          if (match) {
+            const promiseText = match[1].trim().replace(/\s+/g, ' ');
+            const expected = r.completionPromise.trim().replace(/\s+/g, ' ');
+            if (promiseText === expected) {
+              console.log('matched');
+              process.exit(0);
+            }
           }
         }
       } catch(e) { /* skip unparseable lines */ }
@@ -184,14 +210,16 @@ if [[ -n "$TRANSCRIPT_PATH" ]] && [[ -f "$TRANSCRIPT_PATH" ]]; then
 
   if [[ "$PROMISE_RESULT" == "matched" ]]; then
     node -e "
-      const { readStateFile, writeStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-      const state = readStateFile('${SPEC_PATH}');
+      const pluginRoot = process.argv[1];
+      const specPath = process.argv[2];
+      const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
+      const state = readStateFile(specPath);
       if (state && state.ralph) {
         state.ralph.status = 'completed';
         state.ralph.active = false;
-        writeStateFile('${SPEC_PATH}', state);
+        writeStateFile(specPath, state);
       }
-    " 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
+    " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
     echo "Ralph loop: completion promise matched. Loop finished." >&2
     exit 0
   fi
@@ -201,19 +229,23 @@ fi
 # 9. Lightweight task check — should we skip full validation?
 # ---------------------------------------------------------------------------
 TASK_CHECK=$(node -e "
-  const { shouldRunFullValidation } = require('${PLUGIN_ROOT}/scripts/ralph-loop');
-  const state = JSON.parse(process.argv[1]);
+  const pluginRoot = process.argv[1];
+  const { shouldRunFullValidation } = require(pluginRoot + '/scripts/ralph-loop');
+  const state = JSON.parse(process.argv[2]);
   const result = shouldRunFullValidation(state);
   console.log(result ? 'run_validation' : 'tasks_pending');
-" "$STATE_JSON" 2>/dev/null || echo "tasks_pending")
+" "$PLUGIN_ROOT" "$STATE_JSON" 2>/dev/null || echo "tasks_pending")
 
 ITERATION_START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 if [[ "$TASK_CHECK" == "tasks_pending" ]]; then
   # Tasks still pending/failed — continue without full validation
   BLOCK_JSON=$(node -e "
-    const { updateRalphIteration } = require('${PLUGIN_ROOT}/scripts/ralph-loop');
-    const state = JSON.parse(process.argv[1]);
+    const pluginRoot = process.argv[1];
+    const specPath = process.argv[2];
+    const iterStart = process.argv[3];
+    const { updateRalphIteration } = require(pluginRoot + '/scripts/ralph-loop');
+    const state = JSON.parse(process.argv[4]);
     const r = state.ralph;
     const nextIter = r.currentIteration + 1;
 
@@ -225,8 +257,8 @@ if [[ "$TASK_CHECK" == "tasks_pending" ]]; then
 
     // Record iteration
     try {
-      updateRalphIteration('${SPEC_PATH}', {
-        startedAt: '${ITERATION_START}',
+      updateRalphIteration(specPath, {
+        startedAt: iterStart,
         completedAt: new Date().toISOString(),
         tasksCompleted: 0,
         tasksFailed: [],
@@ -237,8 +269,8 @@ if [[ "$TASK_CHECK" == "tasks_pending" ]]; then
     } catch(e) { process.stderr.write('Ralph stop-hook: failed to update iteration: ' + e.message + '\n'); }
 
     // Re-read state to get updated iteration count
-    const { readStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-    const updated = readStateFile('${SPEC_PATH}');
+    const { readStateFile } = require(pluginRoot + '/scripts/state-file');
+    const updated = readStateFile(specPath);
     const currentIter = updated ? updated.ralph.currentIteration : nextIter;
     const maxIter = updated ? updated.ralph.maxIterations : r.maxIterations;
 
@@ -249,7 +281,7 @@ if [[ "$TASK_CHECK" == "tasks_pending" ]]; then
     };
 
     console.log(JSON.stringify(output));
-  " "$STATE_JSON" 2>/dev/null) || { echo "Ralph stop-hook: failed to build block response" >&2; exit 0; }
+  " "$PLUGIN_ROOT" "$SPEC_PATH" "$ITERATION_START" "$STATE_JSON" 2>/dev/null) || { echo "Ralph stop-hook: failed to build block response" >&2; exit 0; }
 
   echo "$BLOCK_JSON"
   exit 0
@@ -261,12 +293,14 @@ fi
 # Extract "Validation Commands" section from the spec file
 VALIDATION_CMDS=$(node -e "
   const fs = require('fs');
-  const specPath = '${SPEC_PATH}';
+  const path = require('path');
+  const specPath = process.argv[1];
+  const projectRoot = process.argv[2];
 
   // Try relative to project root first, then absolute
   let fullPath = specPath;
   if (!fs.existsSync(fullPath)) {
-    fullPath = require('path').join('${PROJECT_ROOT}', specPath);
+    fullPath = path.join(projectRoot, specPath);
   }
   if (!fs.existsSync(fullPath)) {
     console.log('');
@@ -286,11 +320,11 @@ VALIDATION_CMDS=$(node -e "
   const section = match[1];
   const commands = [];
 
-  // Match fenced code blocks
-  const codeBlocks = section.match(/\x60\x60\x60(?:bash|sh|shell)?\n([\s\S]*?)\x60\x60\x60/g);
+  // Match only explicitly tagged bash/sh/shell fenced code blocks
+  const codeBlocks = section.match(/\x60\x60\x60(?:bash|sh|shell)\n([\s\S]*?)\x60\x60\x60/g);
   if (codeBlocks) {
     for (const block of codeBlocks) {
-      const inner = block.replace(/\x60\x60\x60(?:bash|sh|shell)?\n/, '').replace(/\x60\x60\x60/, '').trim();
+      const inner = block.replace(/\x60\x60\x60(?:bash|sh|shell)\n/, '').replace(/\x60\x60\x60/, '').trim();
       inner.split('\n').forEach(line => {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith('#')) commands.push(trimmed);
@@ -306,20 +340,22 @@ VALIDATION_CMDS=$(node -e "
   }
 
   console.log(JSON.stringify(commands));
-" 2>/dev/null || echo "[]")
+" "$SPEC_PATH" "$PROJECT_ROOT" 2>/dev/null || echo "[]")
 
 # If no validation commands found, treat as pass (all tasks completed)
 if [[ "$VALIDATION_CMDS" == "[]" ]] || [[ -z "$VALIDATION_CMDS" ]]; then
   # No validation commands — tasks are all done, mark completed
   node -e "
-    const { readStateFile, writeStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-    const state = readStateFile('${SPEC_PATH}');
+    const pluginRoot = process.argv[1];
+    const specPath = process.argv[2];
+    const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
+    const state = readStateFile(specPath);
     if (state && state.ralph) {
       state.ralph.status = 'completed';
       state.ralph.active = false;
-      writeStateFile('${SPEC_PATH}', state);
+      writeStateFile(specPath, state);
     }
-  " 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
+  " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
   echo "Ralph loop: all tasks completed (no validation commands to run). Loop finished." >&2
   exit 0
 fi
@@ -367,13 +403,17 @@ ITERATION_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 if [[ "$VALIDATION_PASS" == "true" ]]; then
   # All validation commands passed — success!
   node -e "
-    const { updateRalphIteration } = require('${PLUGIN_ROOT}/scripts/ralph-loop');
-    const { readStateFile, writeStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
+    const pluginRoot = process.argv[1];
+    const specPath = process.argv[2];
+    const iterStart = process.argv[3];
+    const iterEnd = process.argv[4];
+    const { updateRalphIteration } = require(pluginRoot + '/scripts/ralph-loop');
+    const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
 
     try {
-      updateRalphIteration('${SPEC_PATH}', {
-        startedAt: '${ITERATION_START}',
-        completedAt: '${ITERATION_END}',
+      updateRalphIteration(specPath, {
+        startedAt: iterStart,
+        completedAt: iterEnd,
         tasksCompleted: 0,
         tasksFailed: [],
         tasksStuck: [],
@@ -382,28 +422,31 @@ if [[ "$VALIDATION_PASS" == "true" ]]; then
       });
     } catch(e) { process.stderr.write('Ralph stop-hook: iteration update failed: ' + e.message + '\n'); }
 
-    const state = readStateFile('${SPEC_PATH}');
+    const state = readStateFile(specPath);
     if (state && state.ralph) {
       state.ralph.status = 'completed';
       state.ralph.active = false;
       state.ralph.finalResult = 'All tasks completed and validation passed';
-      writeStateFile('${SPEC_PATH}', state);
+      writeStateFile(specPath, state);
     }
-  " 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
+  " "$PLUGIN_ROOT" "$SPEC_PATH" "$ITERATION_START" "$ITERATION_END" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
   echo "Ralph loop: all validation commands passed. Loop finished successfully." >&2
   exit 0
 else
   # Validation failed — block exit and continue iterating
   BLOCK_JSON=$(node -e "
-    const { updateRalphIteration } = require('${PLUGIN_ROOT}/scripts/ralph-loop');
-    const { readStateFile } = require('${PLUGIN_ROOT}/scripts/state-file');
-
-    const failures = process.argv[1];
+    const pluginRoot = process.argv[1];
+    const specPath = process.argv[2];
+    const iterStart = process.argv[3];
+    const iterEnd = process.argv[4];
+    const failures = process.argv[5];
+    const { updateRalphIteration } = require(pluginRoot + '/scripts/ralph-loop');
+    const { readStateFile } = require(pluginRoot + '/scripts/state-file');
 
     try {
-      updateRalphIteration('${SPEC_PATH}', {
-        startedAt: '${ITERATION_START}',
-        completedAt: '${ITERATION_END}',
+      updateRalphIteration(specPath, {
+        startedAt: iterStart,
+        completedAt: iterEnd,
         tasksCompleted: 0,
         tasksFailed: [],
         tasksStuck: [],
@@ -412,7 +455,7 @@ else
       });
     } catch(e) { process.stderr.write('Ralph stop-hook: iteration update failed: ' + e.message + '\n'); }
 
-    const state = readStateFile('${SPEC_PATH}');
+    const state = readStateFile(specPath);
     const r = state ? state.ralph : null;
     const currentIter = r ? r.currentIteration : '?';
     const maxIter = r ? r.maxIterations : '?';
@@ -424,7 +467,7 @@ else
     };
 
     console.log(JSON.stringify(output));
-  " "$VALIDATION_FAILURES" 2>/dev/null) || { echo "Ralph stop-hook: failed to build block response" >&2; exit 0; }
+  " "$PLUGIN_ROOT" "$SPEC_PATH" "$ITERATION_START" "$ITERATION_END" "$VALIDATION_FAILURES" 2>/dev/null) || { echo "Ralph stop-hook: failed to build block response" >&2; exit 0; }
 
   echo "$BLOCK_JSON"
   exit 0

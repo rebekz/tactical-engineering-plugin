@@ -129,6 +129,7 @@ function updateRalphIteration(specPath, iterationResult) {
   // Check if max iterations reached
   if (state.ralph.currentIteration >= state.ralph.maxIterations) {
     state.ralph.status = 'failed';
+    state.ralph.active = false;
   }
 
   // Update lastUpdated timestamp
