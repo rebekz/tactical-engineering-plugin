@@ -1,7 +1,7 @@
 ---
 name: plan_w_team
 description: Creates a detailed engineering implementation plan based on user requirements, accepts an existing plan document, or converts BMad output documents. Saves to specs directory.
-argument-hint: [user prompt or --accept <path>[,<path>,...] or --bmad <bmad-output-path>] [orchestration prompt]
+argument-hint: [user-prompt | --accept path[,path2,...] | --bmad path] [orchestration-prompt] [--ralph [--max-iterations N]]
 model: opus
 disallowed-tools: Task, EnterPlanMode
 allowed-tools: AskUserQuestion, Bash, Glob, Grep, Read, Write, Edit, WebFetch, WebSearch, TaskOutput
@@ -78,6 +78,25 @@ if ($1.startsWith("--bmad")) {
   MODE = "create"
   USER_PROMPT = $1
   ORCHESTRATION_PROMPT = $2
+}
+```
+
+### Ralph Flag Detection
+
+Parse ralph flags from the arguments (applies to all modes):
+
+```typescript
+const RALPH_MODE = arguments.includes('--ralph')
+const MAX_ITERATIONS = (() => {
+  const idx = arguments.indexOf('--max-iterations')
+  if (idx !== -1 && arguments[idx + 1]) {
+    return Math.min(Math.max(parseInt(arguments[idx + 1]), 1), 50)
+  }
+  return 5
+})()
+
+if (RALPH_MODE) {
+  console.log(`Ralph mode: will auto-start build with max ${MAX_ITERATIONS} iterations after planning`)
 }
 ```
 
@@ -824,6 +843,22 @@ Also check environment: AGENT_TEAMS_ENABLED = (process.env.CLAUDE_CODE_EXPERIMEN
 
 ## Handoff
 
+### Ralph Auto-Handoff
+
+When `RALPH_MODE` is enabled, skip the handoff question and auto-start build:
+
+```typescript
+if (RALPH_MODE) {
+  console.log(`Ralph mode: auto-starting build with max ${MAX_ITERATIONS} iterations`)
+  // Auto-invoke /build with ralph flags
+  // Equivalent to: /build specs/<filename>.md --ralph --max-iterations N
+  Skill({ skill: "tactical-engineering:build", args: `specs/${filename}.md --ralph --max-iterations ${MAX_ITERATIONS}` })
+  return // Skip the AskUserQuestion below
+}
+```
+
+When `RALPH_MODE` is NOT enabled, fall through to the existing handoff below.
+
 After presenting the report, run a two-part handoff.
 
 ### Part A: Capture Planning Patterns
@@ -1010,6 +1045,19 @@ Handle each option:
 
 # Convert from different project
 /plan_w_team --bmad ~/project/self/bmad-new/other-project/_bmad_output/planning-artifacts
+```
+
+### Ralph Mode Examples
+
+```bash
+# Full lifecycle with ralph — plan then auto-build with iteration
+/plan_w_team "Add user authentication" --ralph
+
+# Custom max iterations for auto-build
+/plan_w_team "Build real-time chat" --ralph --max-iterations 10
+
+# Accept plan and auto-build with ralph
+/plan_w_team --accept docs/plans/my-plan.md --ralph
 ```
 
 ## Tips
