@@ -120,7 +120,7 @@ if (completedTasks.length === 0) {
 
 ### Analysis Phase
 
-Launch 6 parallel subagents to analyze the spec and tasks:
+Launch 7 parallel subagents to analyze the spec and tasks:
 
 ```typescript
 // Launch all agents in parallel
@@ -281,6 +281,24 @@ Add patterns to appropriate sections (Architecture, Deployment, Testing, etc.):
   }),
 
   Task({
+    subagent_type: "planning-patterns-agent",
+    prompt: `Analyze spec ${specPath} and extract reusable planning-level patterns.
+
+Focus on decisions about:
+- Team composition (who was on the team and why)
+- Testing strategy (what testing approach was used)
+- Task ordering and dependencies
+- Scope decisions (what was included/excluded)
+
+Read existing docs/planning-patterns.md to avoid duplicates.
+Append new patterns under the appropriate category.
+
+Report what patterns were extracted.`,
+    model: "opus",
+    run_in_background: true
+  }),
+
+  Task({
     subagent_type: "doc-assembler-agent",
     prompt: `Coordinate final assembly and validation.
 
@@ -290,12 +308,14 @@ Wait for all other agents to complete:
 3. Read all solutions (docs/solutions/*/*.md)
 4. Read updated docs/deployment.md
 5. Read updated CLAUDE.md
+6. Read updated docs/planning-patterns.md
 
 Validate:
 - [ ] All decisions have ADRs created
 - [ ] All errors have solutions documented
 - [ ] Deployment.md has new changelog entry
 - [ ] CLAUDE.md has new patterns (if any)
+- [ ] Planning patterns extracted (if any)
 - [ ] All files are valid markdown
 - [ ] All cross-references work
 
@@ -395,6 +415,9 @@ Deployment:
 Agent Guidelines:
 - CLAUDE.md (updated with new patterns)
 
+Planning Patterns:
+- docs/planning-patterns.md (N new patterns extracted)
+
 ---
 Knowledge compounded! Future builds will now benefit from these learnings.
 ```
@@ -433,12 +456,20 @@ patterns:
   - "Error response format"
   - "Service management with systemd"
 
+planning_patterns_extracted: 2
+planning_patterns:
+  - category: "Testing Strategy"
+    pattern: "Always include QA with real data tests across csv/iceberg/postgres"
+  - category: "Team Composition"
+    pattern: "Include dedicated docs agent for API-heavy features"
+
 validation:
   all_adrs_created: true
   all_solutions_documented: true
   deployment_updated: true
   claude_md_updated: true
   all_cross_references_valid: true
+  planning_patterns_updated: true
 ```
 
 ## Error Handling

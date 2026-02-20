@@ -104,6 +104,18 @@ After completing builds, run `/compound` to document:
 
 ---
 
+### Knowledge-Aware Planning
+
+**Principle:** Plans should leverage accumulated knowledge from past builds.
+
+The compound engineering loop has two sides:
+- **Write side**: `/compound` extracts learnings → `docs/adr/`, `docs/solutions/`, `docs/planning-patterns.md`
+- **Read side**: `/plan_w_team` reads these during "Review Past Learnings" before designing
+
+When applying past learnings, always cite the source (e.g., "Based on ADR-003").
+
+---
+
 ### Plan-First Development
 
 **Principle:** Always create a plan before building.
@@ -176,6 +188,16 @@ color: purple
 ## Report
 <output format>
 ```
+
+---
+
+### Content-Based Feature Detection
+
+**Principle:** Detect capabilities from content, not from metadata or headings alone.
+
+When determining what features a document supports, scan for actual content patterns rather than structural headings. Headings may exist as empty templates.
+
+**Example:** Team mode detection scans for `####` subheadings, `- **Name:**` fields, and `- **Agent Type:**` fields under `### Team Members` — not just the heading itself.
 
 ---
 

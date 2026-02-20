@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-02-03
+last_updated: 2026-02-20
 environment: production
 platform: linux-amd64
 ---
@@ -37,3 +37,20 @@ Located in `.claude/`:
 **Lessons Learned:**
 - This is a local development tool, not a deployed service
 - Documentation is kept with the project for version control
+
+### 2026-02-20 - Knowledge-Aware Planning + Smart Team-Mode Handoff
+
+**Changes:**
+- Added `docs/planning-patterns.md` as planning memory store
+- Added `plugins/tactical-engineering/agents/planning-patterns-agent.md` (7th compound agent)
+- Modified `/plan_w_team` to read past learnings before designing solutions
+- Modified `/plan_w_team` handoff to detect team signals and surface --team flag
+- Modified `/compound` to include planning-patterns-agent in pipeline
+- Removed static build suggestions from all 4 report formats
+
+**Environment Requirements:**
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` for team mode (auto-detected, graceful fallback)
+
+**Lessons Learned:**
+- Sequential execution prevents edit conflicts when multiple tasks modify overlapping file sections
+- Track-based parallelism (separate files on separate tracks) maximizes throughput without conflicts
