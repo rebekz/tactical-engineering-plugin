@@ -170,11 +170,59 @@ When BRAINSTORM_MODE is true, run the brainstorming skill before planning:
    - Ask about success criteria early
    - Continue until idea is clear OR user says "proceed"
 
-5. **Phase 2: Explore Approaches** - Propose 2-3 concrete approaches based on research and conversation. For each: name, 2-3 sentence description, pros, cons, best when. Lead with recommendation. Apply YAGNI. Ask user which approach they prefer.
+   **Ask each question individually using AskUserQuestion.** Example for first question:
+   ```typescript
+   AskUserQuestion({
+     questions: [{
+       question: "What is the core problem this feature solves? Who are the primary users?",
+       header: "Purpose",
+       options: [
+         { label: "<Option A>", description: "<Contextual option based on USER_PROMPT and repo research>" },
+         { label: "<Option B>", description: "<Alternative interpretation>" },
+         { label: "<Option C>", description: "<Another possibility>" }
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+   After each answer, ask the next question. Topics to cover (one at a time): Purpose, Users, Constraints, Success criteria, Edge cases, Existing patterns. Use multiple choice when natural options exist; use open-ended when the question is too broad for predefined options. **Loop until the idea is clear or user says "proceed".**
+
+5. **Phase 2: Explore Approaches** - Propose 2-3 concrete approaches based on research and conversation. For each: name, 2-3 sentence description, pros, cons, best when. Lead with recommendation. Apply YAGNI. Then ask the user to choose:
+   ```typescript
+   AskUserQuestion({
+     questions: [{
+       question: "Which approach do you prefer?",
+       header: "Approach",
+       options: [
+         { label: "A: <Name> (Recommended)", description: "<Brief summary of approach A and why it's recommended>" },
+         { label: "B: <Name>", description: "<Brief summary of approach B>" },
+         { label: "C: <Name>", description: "<Brief summary of approach C>" }
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
 
 6. **Phase 3: Capture the Design** - Write brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` using the template from the brainstorming skill. Ensure `docs/brainstorms/` directory exists before writing.
 
-7. **Resolve Open Questions** - Before proceeding, check if there are Open Questions in the brainstorm document. Ask the user about each one via AskUserQuestion. Move resolved questions to a "Resolved Questions" section.
+7. **Resolve Open Questions** - Before proceeding, check if there are Open Questions in the brainstorm document. Ask the user about each one individually via AskUserQuestion. Move resolved questions to a "Resolved Questions" section.
+   ```typescript
+   // For each open question in the brainstorm document:
+   AskUserQuestion({
+     questions: [{
+       question: "<Open question from brainstorm document>",
+       header: "Open Q",
+       options: [
+         { label: "<Option A>", description: "<Reasonable answer based on context>" },
+         { label: "<Option B>", description: "<Alternative answer>" }
+       ],
+       multiSelect: false
+     }]
+   })
+   // After each answer, update the brainstorm document:
+   // - Move the question from "Open Questions" to "Resolved Questions"
+   // - Record the user's answer
+   ```
 
 8. **Spec-Flow Analysis** - After brainstorm capture, spawn a context-gatherer agent to validate user flow completeness:
    ```typescript
@@ -185,7 +233,21 @@ When BRAINSTORM_MODE is true, run the brainstorming skill before planning:
      model: "sonnet"
    })
    ```
-   If gaps are found, present them to the user and ask if they want to address them before proceeding.
+   If gaps are found, present them to the user:
+   ```typescript
+   AskUserQuestion({
+     questions: [{
+       question: "The spec-flow analysis found gaps in the brainstorm: <list gaps>. Would you like to address them before proceeding to planning?",
+       header: "Gaps",
+       options: [
+         { label: "Address gaps", description: "Discuss and resolve the identified gaps before planning" },
+         { label: "Proceed anyway", description: "Move to planning — gaps can be resolved during implementation" }
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+   If user selects "Address gaps", discuss each gap one at a time using AskUserQuestion, then update the brainstorm document.
 
 9. **Handoff to Planning** - After brainstorm is complete, proceed directly to the Create Mode Workflow (the brainstorm document becomes the input context for planning). Set BRAINSTORM_FILE to the path of the brainstorm document just created.
 
