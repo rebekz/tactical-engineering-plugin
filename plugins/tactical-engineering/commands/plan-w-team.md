@@ -1,10 +1,10 @@
 ---
 name: plan_w_team
-description: Creates a detailed engineering implementation plan based on user requirements, accepts an existing plan document, or converts BMad output documents. Saves to specs directory.
-argument-hint: [user-prompt | --accept path[,path2,...] | --bmad path] [orchestration-prompt] [--ralph [--max-iterations N]]
+description: Creates a detailed engineering implementation plan based on user requirements, accepts an existing plan document, or converts BMad output documents. Supports brainstorming with --brainstorm flag. Saves to specs directory.
+argument-hint: [user-prompt | --accept path[,path2,...] | --bmad path] [orchestration-prompt] [--brainstorm] [--ralph [--max-iterations N]]
 model: opus
 disallowed-tools: Task, EnterPlanMode
-allowed-tools: AskUserQuestion, Bash, Glob, Grep, Read, Write, Edit, WebFetch, WebSearch, TaskOutput
+allowed-tools: Agent, AskUserQuestion, Bash, Glob, Grep, Read, Write, Edit, WebFetch, WebSearch, TaskOutput
 hooks:
   Stop:
     - hooks:
@@ -100,6 +100,24 @@ if (RALPH_MODE) {
 }
 ```
 
+### Brainstorm Flag Detection
+
+Parse brainstorm flag from arguments:
+
+```typescript
+const BRAINSTORM_MODE = arguments.includes('--brainstorm')
+
+// --brainstorm is NOT compatible with --ralph
+if (BRAINSTORM_MODE && RALPH_MODE) {
+  console.log('Error: --brainstorm and --ralph cannot be used together. Brainstorming requires interactive dialogue.')
+  return
+}
+
+if (BRAINSTORM_MODE) {
+  console.log('Brainstorm mode: will run collaborative brainstorm phase before planning')
+}
+```
+
 ### Create Mode (Default)
 
 When MODE is "create":
@@ -113,6 +131,65 @@ When MODE is "create":
 - Determine the task type (chore|feature|refactor|fix|enhancement) and complexity (simple|medium|complex)
 - Think deeply about the best approach to implement the requested functionality or solve the problem
 - Understand the codebase directly without subagents to understand existing patterns and architecture
+
+#### Brainstorm Phase (when --brainstorm flag is set)
+
+When BRAINSTORM_MODE is true, run the brainstorming skill before planning:
+
+1. **Load Brainstorming Skill** - Load the `brainstorming` skill for detailed question techniques, approach exploration, and YAGNI principles
+
+2. **Lightweight Repo Research** - Spawn a context-gatherer agent to understand existing patterns:
+   ```typescript
+   Agent({
+     description: "Research codebase patterns",
+     prompt: "Understand existing patterns related to: <USER_PROMPT>. Focus on: similar features, established patterns, CLAUDE.md guidance. Return a concise summary of relevant findings.",
+     subagent_type: "tactical-engineering:context-gatherer",
+     model: "sonnet"
+   })
+   ```
+
+3. **Phase 0: Assess Clarity** - Evaluate whether full brainstorming is needed based on the USER_PROMPT. If requirements are already clear (specific acceptance criteria, referenced patterns, exact behavior, constrained scope), suggest skipping brainstorm:
+   ```typescript
+   AskUserQuestion({
+     questions: [{
+       question: "Your requirements seem detailed enough to proceed directly to planning. Should I brainstorm first or go straight to planning?",
+       header: "Clarity",
+       options: [
+         { label: "Skip to planning", description: "Requirements are clear, proceed directly to plan creation" },
+         { label: "Brainstorm first", description: "Explore the idea further before planning" }
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+
+4. **Phase 1: Understand the Idea** - Use AskUserQuestion one question at a time following the brainstorming skill's question techniques:
+   - Prefer multiple choice when natural options exist
+   - Start broad (purpose, users) then narrow (constraints, edge cases)
+   - Validate assumptions explicitly
+   - Ask about success criteria early
+   - Continue until idea is clear OR user says "proceed"
+
+5. **Phase 2: Explore Approaches** - Propose 2-3 concrete approaches based on research and conversation. For each: name, 2-3 sentence description, pros, cons, best when. Lead with recommendation. Apply YAGNI. Ask user which approach they prefer.
+
+6. **Phase 3: Capture the Design** - Write brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` using the template from the brainstorming skill. Ensure `docs/brainstorms/` directory exists before writing.
+
+7. **Resolve Open Questions** - Before proceeding, check if there are Open Questions in the brainstorm document. Ask the user about each one via AskUserQuestion. Move resolved questions to a "Resolved Questions" section.
+
+8. **Spec-Flow Analysis** - After brainstorm capture, spawn a context-gatherer agent to validate user flow completeness:
+   ```typescript
+   Agent({
+     description: "Validate brainstorm completeness",
+     prompt: "Review the brainstorm at docs/brainstorms/<filename>.md. Check for: completeness of user flows, missing edge cases, gaps in requirements, unclear acceptance criteria. Return a brief analysis of any gaps found.",
+     subagent_type: "tactical-engineering:context-gatherer",
+     model: "sonnet"
+   })
+   ```
+   If gaps are found, present them to the user and ask if they want to address them before proceeding.
+
+9. **Handoff to Planning** - After brainstorm is complete, proceed directly to the Create Mode Workflow (the brainstorm document becomes the input context for planning). Set BRAINSTORM_FILE to the path of the brainstorm document just created.
+
+**Important:** After the brainstorm phase, the command continues into the regular Create Mode Workflow. The brainstorm document provides context but does not replace the planning steps.
 
 ### Accept Mode (Import Existing Plan)
 
@@ -658,8 +735,54 @@ TaskOutput({
 
 ### Create Mode Workflow
 
+0. **Brainstorm Auto-Detect** - Scan `docs/brainstorms/` for a recent brainstorm matching the USER_PROMPT:
+   - List files in `docs/brainstorms/` directory
+   - For each `.md` file, read the YAML frontmatter `topic:` field
+   - Check if the topic semantically matches the USER_PROMPT
+   - Only consider files created within the last 14 days (check `date:` frontmatter)
+   - If multiple matches, use the most recent one
+   - If a match is found:
+     - Read the brainstorm document fully
+     - Set BRAINSTORM_FILE to the file path
+     - Carry forward all key decisions, chosen approach, constraints, and open questions
+     - Announce: "Found relevant brainstorm: <path>. Incorporating decisions into this plan."
+   - If no match is found AND BRAINSTORM_MODE was not set, skip silently
+   - If BRAINSTORM_FILE was already set (from brainstorm phase), skip auto-detect
 1. **Analyze Requirements** - Parse the USER_PROMPT to understand the core problem and desired outcome
 2. **Understand Codebase** - Without subagents, directly understand existing patterns, architecture, and relevant files
+2.5. **Research Phase (Parallel Agents)** - Spawn research agents in parallel for deeper context:
+   ```typescript
+   // Agent 1: Codebase patterns research
+   Agent({
+     description: "Research codebase patterns",
+     prompt: "Analyze the codebase for patterns related to: <USER_PROMPT>. Focus on: existing implementations of similar features, architectural patterns, file organization conventions, naming conventions, test patterns. Return a structured summary with file paths and line numbers.",
+     subagent_type: "tactical-engineering:context-gatherer",
+     model: "sonnet",
+     run_in_background: true
+   })
+
+   // Agent 2: Past learnings research
+   Agent({
+     description: "Research past learnings",
+     prompt: "Search docs/solutions/, docs/adr/, and docs/planning-patterns.md for learnings relevant to: <USER_PROMPT>. Return applicable patterns, decisions, and pitfalls with their sources.",
+     subagent_type: "Explore",
+     model: "sonnet",
+     run_in_background: true
+   })
+   ```
+   Wait for both agents to complete. Incorporate findings into the planning context.
+
+   **When to spawn external research:** If the feature involves security, payments, external APIs, or unfamiliar frameworks, also spawn:
+   ```typescript
+   // Agent 3: External best practices (conditional)
+   Agent({
+     description: "Research external best practices",
+     prompt: "Research best practices and documentation for: <relevant-technology>. Focus on official docs, security considerations, and common pitfalls.",
+     subagent_type: "Explore",
+     model: "sonnet",
+     run_in_background: true
+   })
+   ```
 3. **Review Past Learnings** - Check for relevant knowledge from past builds:
    - Read `docs/planning-patterns.md` if it exists — note relevant planning preferences
    - Scan `docs/adr/` for architecture decisions that may apply to this feature
@@ -668,9 +791,75 @@ TaskOutput({
    - When a pattern is applied, cite its source in the plan (e.g., "Based on ADR-003" or "Per planning pattern: always include QA")
    - If none of these files/directories exist or contain relevant content, skip silently
 4. **Design Solution** - Develop technical approach including architecture decisions and implementation strategy
+4.5. **Select Detail Level** - Ask user what level of detail they want in the spec:
+   ```typescript
+   AskUserQuestion({
+     questions: [{
+       question: "What level of detail should the plan include?",
+       header: "Detail level",
+       options: [
+         {
+           label: "MINIMAL",
+           description: "Core sections with bare-bones content. Task descriptions, objectives, and acceptance criteria only."
+         },
+         {
+           label: "MORE (Recommended)",
+           description: "Standard depth. Adds technical considerations, dependencies, risk notes, and implementation strategy within each section."
+         },
+         {
+           label: "A LOT",
+           description: "Maximum depth. Adds phased implementation details, alternative approaches considered, system impact analysis, and detailed risk mitigation within each section."
+         }
+       ],
+       multiSelect: false
+     }]
+   })
+   ```
+
+   **Detail Level Guidelines:**
+   All 7 required sections are always present (enforced by Stop hooks). The detail level controls depth WITHIN each section:
+
+   **MINIMAL:**
+   - `## Task Description` - 1-2 sentences
+   - `## Objective` - Single bullet list
+   - `## Relevant Files` - File paths only, no explanations
+   - `## Step by Step Tasks` - Task name, assignee, and 1-line description per task
+   - `## Acceptance Criteria` - Checkbox list only
+   - `## Team Orchestration` - Minimal orchestration boilerplate
+   - `### Team Members` - Name, role, agent type only
+
+   **MORE (default):**
+   - `## Task Description` - 1-2 paragraphs with context
+   - `## Objective` - Numbered goals with success criteria
+   - `## Relevant Files` - File paths with brief purpose descriptions
+   - `## Step by Step Tasks` - Full task details: dependencies, agent type, implementation notes, acceptance criteria per task
+   - `## Acceptance Criteria` - Grouped by functional/non-functional/quality gates
+   - `## Team Orchestration` - Full orchestration workflow with code examples
+   - `### Team Members` - Full member definitions with responsibilities
+
+   **A LOT:**
+   - All MORE content PLUS:
+   - `## Task Description` - Includes problem statement, proposed solution, alternative approaches considered
+   - `## Objective` - Includes phased objectives with milestones
+   - `## Relevant Files` - Includes file dependency graph and interaction notes
+   - `## Step by Step Tasks` - Includes detailed implementation requirements, code snippets, edge case handling per task
+   - `## Acceptance Criteria` - Includes integration test scenarios, error propagation checks, API surface parity
+   - `## Team Orchestration` - Includes risk mitigation strategies, rollback procedures
+   - `### Team Members` - Includes expertise requirements, fallback assignments
 5. **Define Team Members** - Use `ORCHESTRATION_PROMPT` (if provided) to guide team composition. Document in plan
 6. **Define Step by Step Tasks** - Use `ORCHESTRATION_PROMPT` (if provided) to guide task granularity and parallel/sequential structure. Document in plan
 7. **Generate Filename** - Create a descriptive kebab-case filename based on the plan's main topic
+7.5. **Brainstorm Cross-Check** (when BRAINSTORM_FILE is set) - Re-read the brainstorm document and verify:
+   - Every Key Decision from the brainstorm is reflected in the spec
+   - The chosen approach is implemented in the spec's solution design
+   - Constraints and requirements are captured in acceptance criteria
+   - Open questions from the brainstorm are either resolved or flagged in the spec
+   - If any brainstorm content is missing from the spec, add it before saving
+   - Add `origin:` field to spec frontmatter pointing to the brainstorm file:
+     ```yaml
+     origin: docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
+     ```
+   - Add source citation in spec: "Based on brainstorm: <path>" for carried-forward decisions
 8. **Save Plan** - Write the plan to `specs/<filename>.md`
 9. **Report** - Provide a summary of key components
 
@@ -719,6 +908,11 @@ TaskOutput({
 
 File: specs/<filename>.md
 Topic: <brief description>
+Detail Level: <MINIMAL|MORE|A LOT>
+
+Brainstorm: <path to brainstorm file> (or "None - direct planning")
+Research Agents: <N> agents spawned (<codebase patterns, past learnings, external research>)
+
 Key Components:
 - <component 1>
 - <component 2>
@@ -1058,6 +1252,20 @@ Handle each option:
 
 # Accept plan and auto-build with ralph
 /plan_w_team --accept docs/plans/my-plan.md --ralph
+```
+
+### Brainstorm Mode Examples
+
+```bash
+# Brainstorm before planning
+/plan_w_team "Add user authentication" --brainstorm
+
+# Brainstorm with orchestration guidance
+/plan_w_team "Build real-time chat feature" "Use 3 agents" --brainstorm
+
+# Auto-detect existing brainstorm (no flag needed if brainstorm exists in docs/brainstorms/)
+/plan_w_team "Add user authentication"
+# ^ will find docs/brainstorms/2026-02-28-user-authentication-brainstorm.md if it exists
 ```
 
 ## Tips
