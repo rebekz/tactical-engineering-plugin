@@ -1204,20 +1204,20 @@ AskUserQuestion({
     header: "Next step",
     options: [
       {
-        label: "Proceed to build",
-        description: "Run /build specs/<filename>.md to execute the plan"
-      },
-      {
-        label: "Refine orchestration",
-        description: "Continue refining the plan before building"
+        label: "Done for now",
+        description: "Save the plan and exit — build later with /build"
       },
       {
         label: "Review plan",
         description: "Open the plan file for manual review"
       },
       {
-        label: "Done for now",
-        description: "Save the plan and exit — build later with /build"
+        label: "Proceed to build",
+        description: "Run /build specs/<filename>.md to execute the plan"
+      },
+      {
+        label: "Refine orchestration",
+        description: "Continue refining the plan before building"
       }
     ],
     multiSelect: false
@@ -1227,7 +1227,9 @@ AskUserQuestion({
 
 ## Handoff Behavior
 
-Handle each option:
+**CRITICAL: You MUST call AskUserQuestion for Part A and Part B above and WAIT for the user's response before taking ANY action below. Do NOT skip the questions. Do NOT auto-select an option. The user decides what happens next.**
+
+Handle each option based on the user's selection:
 
 - **"Build with --team"** (team signals, env var set): Auto-run `/build specs/<filename>.md --team`
 - **"Build with --team"** (team signals, env var NOT set): Display setup instructions:
