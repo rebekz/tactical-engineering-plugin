@@ -134,6 +134,44 @@ Plan assembled. What next?
 > Abort
 ```
 
+### `/get-it-done`
+
+Full autonomous engineering workflow — chains ralph-check, brainstorm, plan, build, and validate into a single command.
+
+**Usage:**
+```bash
+# Full pipeline from idea to validation
+/get-it-done "Add user authentication with OAuth"
+
+# With brainstorm phase first
+/get-it-done "Build real-time chat feature" --brainstorm
+
+# Accept an existing plan and build+validate it
+/get-it-done --accept specs/my-plan.md
+
+# Convert BMad output and build+validate
+/get-it-done --bmad _bmad_output/planning-artifacts
+
+# With ralph-loop for autonomous iteration
+/get-it-done "Add dark mode support" --ralph --max-iterations 10
+```
+
+**What it does:**
+1. **Ralph check** — If `ralph-loop:ralph-loop` skill is installed, starts it with completion promise "DONE"
+2. **Brainstorm** (optional) — If `--brainstorm` flag present, runs collaborative brainstorm session
+3. **Plan** — Invokes `/plan-w-team` with all arguments (supports --accept, --bmad, raw prompts)
+4. **Build** — Invokes `/build --team` with the generated spec path
+5. **Validate** — Invokes `/validate` with the same spec path
+6. **Done** — Outputs summary and `<promise>DONE</promise>` signal
+
+**Flags:**
+- `--brainstorm` — Run brainstorm session before planning
+- `--ralph` — Wrap workflow in ralph-loop for autonomous iteration
+- `--max-iterations N` — Max ralph-loop iterations
+- `--completion-promise TEXT` — Custom completion promise text
+
+All other arguments are passed through to `/plan-w-team`.
+
 ## Execution Commands
 
 ### `/build`
