@@ -77,12 +77,15 @@ if (BRAINSTORM_FLAG) {
 
 ### Step 3: Plan
 
-Invoke `/plan-w-team` with the remaining arguments (feature description, `--accept path`, or `--bmad path`). When /plan-w-team presents its handoff questions, the user responds normally.
+Invoke `/plan-w-team` with the remaining arguments (feature description, `--accept path`, or `--bmad path`).
 
 ```typescript
 // Invoke plan-w-team with cleaned arguments
 Skill({ skill: "tactical-engineering:plan-w-team", args: cleanArgs })
 ```
+
+**CRITICAL — Plan-w-team Handoff Override:**
+When `/plan-w-team` finishes and presents its handoff question ("How would you like to proceed?"), you MUST select **"Done for now"**. Do NOT select "Build with --team" or "Proceed to build" — `/get-it-done` handles the build step itself in Step 4. Selecting a build option here would cause a double-build.
 
 After /plan-w-team completes, detect the generated plan path:
 
@@ -91,6 +94,12 @@ After /plan-w-team completes, detect the generated plan path:
 const specFiles = Glob({ pattern: "specs/*.md" })
 // Sort by modification time, take the most recent
 const PLAN_PATH = specFiles[specFiles.length - 1]  // Glob returns sorted by mtime
+
+if (!PLAN_PATH) {
+  console.error("ERROR: No spec file found in specs/. Plan-w-team may have failed.")
+  console.error("Aborting /get-it-done pipeline.")
+  return
+}
 
 console.log(`Plan created at: ${PLAN_PATH}. Continuing to build...`)
 ```
@@ -117,30 +126,88 @@ Invoke `/validate` with the same plan path to verify the implementation meets al
 Skill({ skill: "tactical-engineering:validate", args: PLAN_PATH })
 ```
 
-Capture the validation result status (PASSED, FAILED, or PARTIAL) from the validate output.
+After `/validate` completes, determine the result by reading its output:
+- **PASSED**: All validation commands succeeded and all acceptance criteria met
+- **PARTIAL**: Some validations passed, some failed or need manual verification
+- **FAILED**: Critical validation commands failed or key acceptance criteria unmet
+
+```typescript
+// Determine validation result from /validate output
+// Look for "Overall Status:" line in the validation report
+// PASSED = all checks green
+// PARTIAL = mix of passed and failed
+// FAILED = critical failures
+```
 
 ### Step 6: Complete
 
-Output a summary and done signal:
+The completion behavior depends on the validation result:
 
+**If PASSED:**
 ```
 /get-it-done Complete!
 
 Plan: <PLAN_PATH>
 Build: Complete
-Validation: <PASSED|FAILED|PARTIAL>
+Validation: PASSED
 
 <promise>DONE</promise>
 ```
 
-The `<promise>DONE</promise>` tag signals completion to ralph-loop if it is active.
+**If PARTIAL:**
+```
+/get-it-done Complete (with warnings)
+
+Plan: <PLAN_PATH>
+Build: Complete
+Validation: PARTIAL
+
+Issues:
+- <list issues from validation report>
+
+Some criteria may need manual verification.
+```
+
+Then ask the user:
+```typescript
+AskUserQuestion({
+  questions: [{
+    question: "Validation passed partially. Signal completion or take action?",
+    header: "Validation",
+    options: [
+      { label: "Signal done", description: "Output <promise>DONE</promise> and finish — remaining items are manual verification" },
+      { label: "Do not signal done", description: "Stop here without signaling completion to ralph-loop" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+Only output `<promise>DONE</promise>` if user selects "Signal done".
+
+**If FAILED:**
+```
+/get-it-done FAILED
+
+Plan: <PLAN_PATH>
+Build: Complete
+Validation: FAILED
+
+Failures:
+- <list failures from validation report>
+
+The pipeline did NOT complete successfully. Do NOT signal done.
+```
+
+Do NOT output `<promise>DONE</promise>` on failure. If ralph-loop is active, it will re-iterate automatically on the next cycle.
 
 ## Key Instructions
 
 - Run these steps in order. Do not stop between steps after planning completes — complete every step through to the end.
 - The user has opted into the full autonomous workflow by invoking /get-it-done.
+- When /plan-w-team presents its handoff question, ALWAYS select "Done for now". Do NOT select any build option — /get-it-done handles the build step itself.
 - After /plan-w-team completes, proceed directly to /build without additional confirmation.
-- The `<promise>DONE</promise>` signal at the end is required for ralph-loop integration.
+- The `<promise>DONE</promise>` signal is ONLY output when validation PASSES. On FAILED, do NOT signal done — let ralph-loop re-iterate. On PARTIAL, ask the user.
 - If any step fails catastrophically (e.g., plan-w-team cannot produce a spec), stop and report the failure to the user rather than continuing with invalid state.
 - The brainstorm step is the only optional interactive phase — all other steps chain automatically.
 
