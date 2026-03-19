@@ -1,5 +1,5 @@
 {
-  "name": "tactical-engineering-marketplace",
+  "name": "te-marketplace",
   "owner": {
     "name": "fitrakacamarga",
     "url": "https://github.com/rebekz"
@@ -10,9 +10,9 @@
   },
   "plugins": [
     {
-      "name": "tactical-engineering",
+      "name": "te",
       "description": "Multi-agent orchestration workflow for Claude Code implementing the Compound Engineering pattern.",
-      "version": "0.6.1",
+      "version": "0.7.0",
       "author": { "name": "fitrakacamarga" },
       "homepage": "https://github.com/rebekz/tactical-engineering-plugin",
       "tags": ["orchestration", "multi-agent", "compound-engineering", "workflow"],

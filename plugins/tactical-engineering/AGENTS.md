@@ -64,6 +64,17 @@ Updates documentation and guides.
 ### Code Reviewer (`code-reviewer`)
 Reviews changes against best practices.
 
+## Review Specialists
+
+### Security Sentinel (`security-sentinel`)
+Performs security audits for vulnerabilities, input validation, auth/authz, hardcoded secrets, and OWASP Top 10 compliance.
+
+### Performance Oracle (`performance-oracle`)
+Analyzes code for performance bottlenecks, algorithmic complexity, database queries, memory usage, and scalability.
+
+### Code Simplicity Reviewer (`code-simplicity-reviewer`)
+Final review pass to ensure code is as simple and minimal as possible. Identifies YAGNI violations and simplification opportunities.
+
 ## Parallel Execution Pattern
 
 ```bash

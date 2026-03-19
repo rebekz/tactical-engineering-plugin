@@ -143,7 +143,7 @@ When BRAINSTORM_MODE is true, run the brainstorming skill before planning:
    Agent({
      description: "Research codebase patterns",
      prompt: "Understand existing patterns related to: <USER_PROMPT>. Focus on: similar features, established patterns, CLAUDE.md guidance. Return a concise summary of relevant findings.",
-     subagent_type: "tactical-engineering:context-gatherer",
+     subagent_type: "te:context-gatherer",
      model: "sonnet"
    })
    ```
@@ -229,7 +229,7 @@ When BRAINSTORM_MODE is true, run the brainstorming skill before planning:
    Agent({
      description: "Validate brainstorm completeness",
      prompt: "Review the brainstorm at docs/brainstorms/<filename>.md. Check for: completeness of user flows, missing edge cases, gaps in requirements, unclear acceptance criteria. Return a brief analysis of any gaps found.",
-     subagent_type: "tactical-engineering:context-gatherer",
+     subagent_type: "te:context-gatherer",
      model: "sonnet"
    })
    ```
@@ -818,7 +818,7 @@ TaskOutput({
    Agent({
      description: "Research codebase patterns",
      prompt: "Analyze the codebase for patterns related to: <USER_PROMPT>. Focus on: existing implementations of similar features, architectural patterns, file organization conventions, naming conventions, test patterns. Return a structured summary with file paths and line numbers.",
-     subagent_type: "tactical-engineering:context-gatherer",
+     subagent_type: "te:context-gatherer",
      model: "sonnet",
      run_in_background: true
    })
@@ -1108,7 +1108,7 @@ if (RALPH_MODE) {
   console.log(`Ralph mode: auto-starting build with max ${MAX_ITERATIONS} iterations`)
   // Auto-invoke /build with ralph flags
   // Equivalent to: /build specs/<filename>.md --ralph --max-iterations N
-  Skill({ skill: "tactical-engineering:build", args: `specs/${filename}.md --ralph --max-iterations ${MAX_ITERATIONS}` })
+  Skill({ skill: "te:build", args: `specs/${filename}.md --ralph --max-iterations ${MAX_ITERATIONS}` })
   return // Skip the AskUserQuestion below
 }
 ```
