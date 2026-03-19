@@ -66,7 +66,7 @@ if (BRAINSTORM_FLAG) {
   cleanArgs = cleanArgs.replace('--brainstorm', '').trim()
 
   // Load and run the brainstorming skill
-  Skill({ skill: "tactical-engineering:brainstorming", args: cleanArgs })
+  Skill({ skill: "te:brainstorming", args: cleanArgs })
 
   // The brainstorm produces a document in docs/brainstorms/
   // After brainstorm completes, proceed to Step 3
@@ -81,7 +81,7 @@ Invoke `/plan-w-team` with the remaining arguments (feature description, `--acce
 
 ```typescript
 // Invoke plan-w-team with cleaned arguments
-Skill({ skill: "tactical-engineering:plan-w-team", args: cleanArgs })
+Skill({ skill: "te:plan-w-team", args: cleanArgs })
 ```
 
 **CRITICAL — Plan-w-team Handoff Override:**
@@ -89,19 +89,32 @@ When `/plan-w-team` finishes and presents its handoff question ("How would you l
 
 After /plan-w-team completes, detect the generated plan path:
 
+#### GATE 1: Plan File Verification
+
+The plan MUST exist before proceeding to build. Do NOT skip this gate.
+
 ```typescript
 // Scan specs/ directory for the most recently created/modified .md file
 const specFiles = Glob({ pattern: "specs/*.md" })
 // Sort by modification time, take the most recent
-const PLAN_PATH = specFiles[specFiles.length - 1]  // Glob returns sorted by mtime
+let PLAN_PATH = specFiles[specFiles.length - 1]  // Glob returns sorted by mtime
 
 if (!PLAN_PATH) {
-  console.error("ERROR: No spec file found in specs/. Plan-w-team may have failed.")
-  console.error("Aborting /get-it-done pipeline.")
-  return
+  // GATE 1 RETRY: Re-run plan-w-team once
+  console.warn("GATE 1 WARNING: No spec file found. Retrying plan-w-team...")
+  Skill({ skill: "te:plan-w-team", args: cleanArgs })
+
+  const retryFiles = Glob({ pattern: "specs/*.md" })
+  PLAN_PATH = retryFiles[retryFiles.length - 1]
+
+  if (!PLAN_PATH) {
+    console.error("GATE 1 FAILED: No spec file found after retry. Aborting pipeline.")
+    // Do NOT output <promise>DONE</promise> — pipeline failed at planning
+    return
+  }
 }
 
-console.log(`Plan created at: ${PLAN_PATH}. Continuing to build...`)
+console.log(`GATE 1 PASSED: Plan exists at ${PLAN_PATH}. Continuing to build...`)
 ```
 
 ### Step 4: Build
@@ -109,13 +122,46 @@ console.log(`Plan created at: ${PLAN_PATH}. Continuing to build...`)
 Invoke `/build` with the detected plan path and `--team` flag for multi-agent execution.
 
 ```typescript
-// Build with team mode for maximum parallelism
-Skill({ skill: "tactical-engineering:build", args: `${PLAN_PATH} --team` })
+// Capture git state before build for GATE 2
+const preBuildDiff = Bash({ command: "git diff --stat HEAD" })
 
-console.log("Build complete. Continuing to validation...")
+// Build with team mode for maximum parallelism
+Skill({ skill: "te:build", args: `${PLAN_PATH} --team` })
+
+console.log("Build complete. Verifying code changes...")
 ```
 
 Wait for the build to complete fully before proceeding.
+
+#### GATE 2: Code Changes Verification
+
+Build MUST produce actual code changes before proceeding to validation. Do NOT skip this gate.
+
+```typescript
+// Check that build actually produced code changes
+const postBuildDiff = Bash({ command: "git diff --stat HEAD" })
+
+if (postBuildDiff.trim() === '' && preBuildDiff.trim() === postBuildDiff.trim()) {
+  // No new changes detected
+  console.warn("GATE 2 WARNING: Build produced no code changes.")
+  console.warn("This may indicate the build failed silently or the plan was already implemented.")
+
+  AskUserQuestion({
+    questions: [{
+      question: "Build produced no code changes. How to proceed?",
+      header: "GATE 2: No Changes Detected",
+      options: [
+        { label: "Continue to validation", description: "Proceed anyway — changes may have been committed during build" },
+        { label: "Abort pipeline", description: "Stop here — investigate why no changes were produced" }
+      ],
+      multiSelect: false
+    }]
+  })
+  // If user selects "Abort pipeline", do NOT output <promise>DONE</promise> and return
+} else {
+  console.log("GATE 2 PASSED: Code changes detected. Continuing to validation...")
+}
+```
 
 ### Step 5: Validate
 
@@ -123,13 +169,17 @@ Invoke `/validate` with the same plan path to verify the implementation meets al
 
 ```typescript
 // Run validation against the plan
-Skill({ skill: "tactical-engineering:validate", args: PLAN_PATH })
+Skill({ skill: "te:validate", args: PLAN_PATH })
 ```
 
 After `/validate` completes, determine the result by reading its output:
 - **PASSED**: All validation commands succeeded and all acceptance criteria met
 - **PARTIAL**: Some validations passed, some failed or need manual verification
 - **FAILED**: Critical validation commands failed or key acceptance criteria unmet
+
+#### GATE 3: Validation Result Gating
+
+Parse the validation output for the "Overall Status:" line. The `<promise>DONE</promise>` signal is strictly gated on this result.
 
 ```typescript
 // Determine validation result from /validate output
@@ -150,6 +200,7 @@ The completion behavior depends on the validation result:
 Plan: <PLAN_PATH>
 Build: Complete
 Validation: PASSED
+Gates: 3/3 passed
 
 <promise>DONE</promise>
 ```
@@ -173,7 +224,7 @@ Then ask the user:
 AskUserQuestion({
   questions: [{
     question: "Validation passed partially. Signal completion or take action?",
-    header: "Validation",
+    header: "GATE 3: Validation",
     options: [
       { label: "Signal done", description: "Output <promise>DONE</promise> and finish — remaining items are manual verification" },
       { label: "Do not signal done", description: "Stop here without signaling completion to ralph-loop" }
@@ -186,12 +237,32 @@ AskUserQuestion({
 Only output `<promise>DONE</promise>` if user selects "Signal done".
 
 **If FAILED:**
+
+Attempt one retry cycle: re-run build on failed tasks, then re-validate.
+
+```typescript
+console.warn("GATE 3 RETRY: Validation failed. Attempting recovery...")
+console.warn("Re-running build to fix failed items, then re-validating...")
+
+// Re-run build (it will detect completed tasks and only retry failed ones)
+Skill({ skill: "te:build", args: `${PLAN_PATH} --team` })
+
+// Re-validate
+Skill({ skill: "te:validate", args: PLAN_PATH })
+
+// Check result again
+// If PASSED or PARTIAL after retry, follow the logic above
+// If still FAILED after retry, report failure below
+```
+
+If still FAILED after retry:
 ```
 /get-it-done FAILED
 
 Plan: <PLAN_PATH>
-Build: Complete
+Build: Complete (with retry)
 Validation: FAILED
+Gates: GATE 3 failed after retry
 
 Failures:
 - <list failures from validation report>
@@ -207,8 +278,12 @@ Do NOT output `<promise>DONE</promise>` on failure. If ralph-loop is active, it 
 - The user has opted into the full autonomous workflow by invoking /get-it-done.
 - When /plan-w-team presents its handoff question, ALWAYS select "Done for now". Do NOT select any build option — /get-it-done handles the build step itself.
 - After /plan-w-team completes, proceed directly to /build without additional confirmation.
-- The `<promise>DONE</promise>` signal is ONLY output when validation PASSES. On FAILED, do NOT signal done — let ralph-loop re-iterate. On PARTIAL, ask the user.
-- If any step fails catastrophically (e.g., plan-w-team cannot produce a spec), stop and report the failure to the user rather than continuing with invalid state.
+- **QUALITY GATES ARE MANDATORY.** Do NOT skip any gate:
+  - **GATE 1:** Plan file MUST exist in `specs/` before proceeding to build. Retry once if missing.
+  - **GATE 2:** Build MUST produce code changes (verified via `git diff --stat`). Warn if no changes detected.
+  - **GATE 3:** Validation result determines DONE signal. PASSED → emit. PARTIAL → ask user. FAILED → retry once, then fail without DONE.
+- The `<promise>DONE</promise>` signal is ONLY output when validation PASSES (or user explicitly approves on PARTIAL). On FAILED, do NOT signal done — let ralph-loop re-iterate.
+- If any step fails catastrophically (e.g., plan-w-team cannot produce a spec after retry), stop and report the failure to the user rather than continuing with invalid state.
 - The brainstorm step is the only optional interactive phase — all other steps chain automatically.
 
 ## Examples

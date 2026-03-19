@@ -419,6 +419,38 @@ Issues:
 - SSE reconnection too slow
 ```
 
+## Knowledge Maintenance
+
+### `/compound-refresh`
+
+Review and refresh `docs/solutions/` learnings against the current codebase. Identifies stale, drifted, or obsolete knowledge.
+
+**Usage:**
+```bash
+# Interactive mode — review and approve each change
+/compound-refresh
+
+# Auto mode — apply all changes without confirmation
+/compound-refresh --auto
+```
+
+**What it does:**
+1. Scans all `.md` files in `docs/solutions/`
+2. Checks if referenced code patterns still exist in the codebase
+3. Classifies each solution as: Keep, Update, Replace, or Archive
+4. Presents classification for approval (unless `--auto`)
+5. Executes approved changes (updates, rewrites, or archives)
+6. Optionally refreshes derived docs (CLAUDE.md, planning-patterns.md)
+
+**Classifications:**
+
+| Status | Meaning |
+|--------|---------|
+| Keep | Code unchanged, advice still accurate |
+| Update | Code evolved but core insight valid — update paths and examples |
+| Replace | Pattern superseded — rewrite with current best practice |
+| Archive | No longer relevant — move to `docs/solutions/_archived/` |
+
 ## Workflow Example
 
 Complete workflow for a feature:
