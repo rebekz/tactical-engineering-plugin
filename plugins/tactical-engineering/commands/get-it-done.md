@@ -172,90 +172,115 @@ Invoke `/validate` with the same plan path to verify the implementation meets al
 Skill({ skill: "te:validate", args: PLAN_PATH })
 ```
 
-After `/validate` completes, determine the result by reading its output:
-- **PASSED**: All validation commands succeeded and all acceptance criteria met
-- **PARTIAL**: Some validations passed, some failed or need manual verification
-- **FAILED**: Critical validation commands failed or key acceptance criteria unmet
+Note the /validate output for the human-readable report, but do NOT trust it to gate the `<promise>DONE</promise>` signal. GATE 3 performs independent verification.
 
-#### GATE 3: Validation Result Gating
+#### GATE 3: Independent Validation Verification
 
-Parse the validation output for the "Overall Status:" line. The `<promise>DONE</promise>` signal is strictly gated on this result.
+**CRITICAL: Do NOT trust /validate's text output to determine the result. You MUST independently verify by running validation commands yourself.**
+
+The `<promise>DONE</promise>` signal is gated on YOUR OWN Bash tool exit codes, not on /validate's report.
 
 ```typescript
-// Determine validation result from /validate output
-// Look for "Overall Status:" line in the validation report
-// PASSED = all checks green
-// PARTIAL = mix of passed and failed
-// FAILED = critical failures
+// ── GATE 3: Independent Validation Verification ──
+// Step 3a: Read the plan file and extract validation commands
+const planContent = Read({ file_path: PLAN_PATH })
+
+// Step 3b: Extract commands from "## Validation Commands" section
+// Look for ```bash ... ``` code blocks within that section
+// Also check for inline backtick commands (- `command`)
+// Parse out each non-comment, non-empty line as a command
+
+// Step 3c: If no validation commands found → FAILED
+if (validationCommands.length === 0) {
+  console.error("GATE 3 FAILED: No validation commands found in spec.")
+  console.error("The spec MUST define validation commands for the pipeline to pass.")
+  // Do NOT output <promise>DONE</promise>
+  // Report failure and stop
+  return
+}
+
+// Step 3d: Run EACH command via Bash tool and track results
+let allPassed = true
+let failedCommands = []
+let passedCount = 0
+
+for (const cmd of validationCommands) {
+  const result = Bash({ command: cmd })
+  // Check the exit code from the Bash tool response
+  if (result.exitCode === 0) {
+    passedCount++
+    console.log(`✅ ${cmd} (exit code: 0)`)
+  } else {
+    allPassed = false
+    failedCommands.push({ command: cmd, exitCode: result.exitCode, output: result.output })
+    console.error(`❌ ${cmd} (exit code: ${result.exitCode})`)
+  }
+}
+
+console.log(`\nGATE 3 Results: ${passedCount}/${validationCommands.length} commands passed`)
+
+// Step 3e: Gate the promise on actual Bash exit codes
+// allPassed is the ONLY signal that matters for emitting <promise>DONE</promise>
 ```
 
 ### Step 6: Complete
 
-The completion behavior depends on the validation result:
+The completion behavior depends on GATE 3's independent verification (the `allPassed` variable from actual Bash exit codes):
 
-**If PASSED:**
+**If `allPassed === true` (all commands exit 0):**
 ```
 /get-it-done Complete!
 
 Plan: <PLAN_PATH>
 Build: Complete
-Validation: PASSED
+Validation: PASSED (independently verified)
 Gates: 3/3 passed
+Commands: N/N passed
 
 <promise>DONE</promise>
 ```
 
-**If PARTIAL:**
-```
-/get-it-done Complete (with warnings)
+**If `allPassed === false` (any command failed):**
 
-Plan: <PLAN_PATH>
-Build: Complete
-Validation: PARTIAL
-
-Issues:
-- <list issues from validation report>
-
-Some criteria may need manual verification.
-```
-
-Then ask the user:
-```typescript
-AskUserQuestion({
-  questions: [{
-    question: "Validation passed partially. Signal completion or take action?",
-    header: "GATE 3: Validation",
-    options: [
-      { label: "Signal done", description: "Output <promise>DONE</promise> and finish — remaining items are manual verification" },
-      { label: "Do not signal done", description: "Stop here without signaling completion to ralph-loop" }
-    ],
-    multiSelect: false
-  }]
-})
-```
-
-Only output `<promise>DONE</promise>` if user selects "Signal done".
-
-**If FAILED:**
-
-Attempt one retry cycle: re-run build on failed tasks, then re-validate.
+Attempt ONE retry cycle: re-run build on failed tasks, then re-verify independently.
 
 ```typescript
-console.warn("GATE 3 RETRY: Validation failed. Attempting recovery...")
+console.warn("GATE 3: Validation failed. Attempting recovery...")
+console.warn(`Failed commands: ${failedCommands.map(f => f.command).join(', ')}`)
 console.warn("Re-running build to fix failed items, then re-validating...")
 
 // Re-run build (it will detect completed tasks and only retry failed ones)
 Skill({ skill: "te:build", args: `${PLAN_PATH} --team` })
 
-// Re-validate
-Skill({ skill: "te:validate", args: PLAN_PATH })
+// Re-verify INDEPENDENTLY — run all validation commands again via Bash
+let retryAllPassed = true
+let retryFailedCommands = []
 
-// Check result again
-// If PASSED or PARTIAL after retry, follow the logic above
-// If still FAILED after retry, report failure below
+for (const cmd of validationCommands) {
+  const result = Bash({ command: cmd })
+  if (result.exitCode === 0) {
+    console.log(`✅ ${cmd} (exit code: 0)`)
+  } else {
+    retryAllPassed = false
+    retryFailedCommands.push({ command: cmd, exitCode: result.exitCode })
+    console.error(`❌ ${cmd} (exit code: ${result.exitCode})`)
+  }
+}
 ```
 
-If still FAILED after retry:
+If `retryAllPassed === true` after retry:
+```
+/get-it-done Complete! (after retry)
+
+Plan: <PLAN_PATH>
+Build: Complete (with retry)
+Validation: PASSED (independently verified after retry)
+Gates: 3/3 passed
+
+<promise>DONE</promise>
+```
+
+If `retryAllPassed === false` after retry:
 ```
 /get-it-done FAILED
 
@@ -264,8 +289,9 @@ Build: Complete (with retry)
 Validation: FAILED
 Gates: GATE 3 failed after retry
 
-Failures:
-- <list failures from validation report>
+Failed commands:
+- <command> (exit code: N)
+- <command> (exit code: N)
 
 The pipeline did NOT complete successfully. Do NOT signal done.
 ```
@@ -281,8 +307,10 @@ Do NOT output `<promise>DONE</promise>` on failure. If ralph-loop is active, it 
 - **QUALITY GATES ARE MANDATORY.** Do NOT skip any gate:
   - **GATE 1:** Plan file MUST exist in `specs/` before proceeding to build. Retry once if missing.
   - **GATE 2:** Build MUST produce code changes (verified via `git diff --stat`). Warn if no changes detected.
-  - **GATE 3:** Validation result determines DONE signal. PASSED → emit. PARTIAL → ask user. FAILED → retry once, then fail without DONE.
-- The `<promise>DONE</promise>` signal is ONLY output when validation PASSES (or user explicitly approves on PARTIAL). On FAILED, do NOT signal done — let ralph-loop re-iterate.
+  - **GATE 3:** Independent validation verification. You MUST re-run all validation commands from the spec using Bash tool directly. `<promise>DONE</promise>` is ONLY emitted when ALL commands return exit code 0.
+- **GATE 3 requires INDEPENDENT VERIFICATION.** After /validate runs (for the human-readable report), you MUST re-run all validation commands from the spec file using the Bash tool directly. Do NOT rely on /validate's text output to determine the result. The `<promise>DONE</promise>` signal MUST only be emitted when you have proof via actual Bash tool exit codes that ALL validation commands succeed.
+- **Zero validation commands = FAILED.** If the spec defines no validation commands, the pipeline MUST report FAILED and NOT emit `<promise>DONE</promise>`.
+- The `<promise>DONE</promise>` signal is ONLY output when ALL validation commands pass (verified by YOUR OWN Bash tool calls). On FAILED, do NOT signal done — let ralph-loop re-iterate.
 - If any step fails catastrophically (e.g., plan-w-team cannot produce a spec after retry), stop and report the failure to the user rather than continuing with invalid state.
 - The brainstorm step is the only optional interactive phase — all other steps chain automatically.
 

@@ -7,6 +7,13 @@
 #   stdin:  { "transcript_path": "/path/to/transcript.jsonl" }
 #   stdout: { "decision": "block", "reason": "...", "systemMessage": "..." }  to BLOCK exit
 #   stdout: (empty) + exit 0  to ALLOW exit
+#
+# Section order (critical for correctness):
+#   1-7: Setup, abort, max iterations
+#   8:   Task check — are all tasks terminal?
+#   9:   Full validation — run actual bash commands from spec
+#   10:  Promise check — ONLY if validation passed (never short-circuits validation)
+#   11:  Handle results
 
 # Always allow exit on unexpected errors — never trap the user
 trap 'exit 0' ERR
@@ -163,70 +170,8 @@ if [[ "$MAX_REACHED" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Check completion promise
-# ---------------------------------------------------------------------------
-if [[ -n "$TRANSCRIPT_PATH" ]] && [[ -f "$TRANSCRIPT_PATH" ]]; then
-  PROMISE_RESULT=$(node -e "
-    const fs = require('fs');
-    const state = JSON.parse(process.argv[1]);
-    const r = state.ralph;
-
-    if (!r.completionPromise) {
-      console.log('no_promise');
-      process.exit(0);
-    }
-
-    const transcriptPath = process.argv[2];
-    // Read last 50 lines of transcript
-    const lines = fs.readFileSync(transcriptPath, 'utf8').split('\n').filter(Boolean);
-    const tail = lines.slice(-50);
-
-    // Search for <promise>TEXT</promise> in assistant messages
-    for (const line of tail) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.role === 'assistant' && entry.message && entry.message.content) {
-          const texts = entry.message.content
-            .filter(c => c.type === 'text')
-            .map(c => c.text)
-            .join('\n');
-
-          // Extract promise tags — use a regex that handles multiline
-          const match = texts.match(/<promise>([\s\S]*?)<\/promise>/);
-          if (match) {
-            const promiseText = match[1].trim().replace(/\s+/g, ' ');
-            const expected = r.completionPromise.trim().replace(/\s+/g, ' ');
-            if (promiseText === expected) {
-              console.log('matched');
-              process.exit(0);
-            }
-          }
-        }
-      } catch(e) { /* skip unparseable lines */ }
-    }
-
-    console.log('not_matched');
-  " "$STATE_JSON" "$TRANSCRIPT_PATH" 2>/dev/null || echo "no_promise")
-
-  if [[ "$PROMISE_RESULT" == "matched" ]]; then
-    node -e "
-      const pluginRoot = process.argv[1];
-      const specPath = process.argv[2];
-      const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
-      const state = readStateFile(specPath);
-      if (state && state.ralph) {
-        state.ralph.status = 'completed';
-        state.ralph.active = false;
-        writeStateFile(specPath, state);
-      }
-    " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
-    echo "Ralph loop: completion promise matched. Loop finished." >&2
-    exit 0
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# 9. Lightweight task check — should we skip full validation?
+# 8. Lightweight task check — should we skip full validation?
+#    (Moved BEFORE promise check — validation must run before promise is trusted)
 # ---------------------------------------------------------------------------
 TASK_CHECK=$(node -e "
   const pluginRoot = process.argv[1];
@@ -288,7 +233,8 @@ if [[ "$TASK_CHECK" == "tasks_pending" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 10. Full validation — all tasks in terminal state
+# 9. Full validation — all tasks in terminal state
+#    (Moved BEFORE promise check — actual bash validation is the source of truth)
 # ---------------------------------------------------------------------------
 # Extract "Validation Commands" section from the spec file
 VALIDATION_CMDS=$(node -e "
@@ -342,66 +288,144 @@ VALIDATION_CMDS=$(node -e "
   console.log(JSON.stringify(commands));
 " "$SPEC_PATH" "$PROJECT_ROOT" 2>/dev/null || echo "[]")
 
-# If no validation commands found, treat as pass (all tasks completed)
+# If no validation commands found, check if a completion promise is configured
 if [[ "$VALIDATION_CMDS" == "[]" ]] || [[ -z "$VALIDATION_CMDS" ]]; then
-  # No validation commands — tasks are all done, mark completed
-  node -e "
-    const pluginRoot = process.argv[1];
-    const specPath = process.argv[2];
-    const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
-    const state = readStateFile(specPath);
-    if (state && state.ralph) {
-      state.ralph.status = 'completed';
-      state.ralph.active = false;
-      writeStateFile(specPath, state);
-    }
-  " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
-  echo "Ralph loop: all tasks completed (no validation commands to run). Loop finished." >&2
-  exit 0
+  HAS_PROMISE=$(node -e "
+    const state = JSON.parse(process.argv[1]);
+    console.log(state.ralph && state.ralph.completionPromise ? 'yes' : 'no');
+  " "$STATE_JSON" 2>/dev/null || echo "no")
+
+  if [[ "$HAS_PROMISE" == "yes" ]]; then
+    # No validation commands but promise configured — fall through to promise check
+    # Set VALIDATION_PASS=true so the promise check section runs
+    VALIDATION_PASS=true
+    VALIDATION_CMDS_EMPTY=true
+    echo "Ralph stop-hook: no validation commands in spec, checking completion promise" >&2
+  else
+    # No validation commands and no promise — tasks done = completed
+    node -e "
+      const pluginRoot = process.argv[1];
+      const specPath = process.argv[2];
+      const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
+      const state = readStateFile(specPath);
+      if (state && state.ralph) {
+        state.ralph.status = 'completed';
+        state.ralph.active = false;
+        writeStateFile(specPath, state);
+      }
+    " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
+    echo "Ralph loop: all tasks completed (no validation commands to run). Loop finished." >&2
+    exit 0
+  fi
 fi
 
-# Run each validation command with a 30s timeout
-VALIDATION_PASS=true
-VALIDATION_FAILURES=""
+# Run each validation command with a 30s timeout (skip if no commands)
+if [[ "${VALIDATION_CMDS_EMPTY:-}" != "true" ]]; then
+  VALIDATION_PASS=true
+  VALIDATION_FAILURES=""
 
-CMD_COUNT=$(echo "$VALIDATION_CMDS" | node -e "
-  let d=''; process.stdin.on('data',c=>d+=c);
-  process.stdin.on('end',()=>{ try{console.log(JSON.parse(d).length)}catch(e){console.log(0)} });
-" 2>/dev/null || echo "0")
-
-for i in $(seq 0 $((CMD_COUNT - 1))); do
-  CMD=$(echo "$VALIDATION_CMDS" | node -e "
+  CMD_COUNT=$(echo "$VALIDATION_CMDS" | node -e "
     let d=''; process.stdin.on('data',c=>d+=c);
-    process.stdin.on('end',()=>{ try{console.log(JSON.parse(d)[$i])}catch(e){console.log('')} });
-  " 2>/dev/null || echo "")
+    process.stdin.on('end',()=>{ try{console.log(JSON.parse(d).length)}catch(e){console.log(0)} });
+  " 2>/dev/null || echo "0")
 
-  if [[ -z "$CMD" ]]; then
-    continue
-  fi
+  for i in $(seq 0 $((CMD_COUNT - 1))); do
+    CMD=$(echo "$VALIDATION_CMDS" | node -e "
+      let d=''; process.stdin.on('data',c=>d+=c);
+      process.stdin.on('end',()=>{ try{console.log(JSON.parse(d)[$i])}catch(e){console.log('')} });
+    " 2>/dev/null || echo "")
 
-  # Execute with 30s timeout
-  CMD_OUTPUT=""
-  CMD_EXIT=0
-  CMD_OUTPUT=$(cd "$PROJECT_ROOT" && timeout 30 bash -c "$CMD" 2>&1) || CMD_EXIT=$?
-
-  if [[ $CMD_EXIT -ne 0 ]]; then
-    VALIDATION_PASS=false
-    if [[ -n "$VALIDATION_FAILURES" ]]; then
-      VALIDATION_FAILURES="${VALIDATION_FAILURES}; "
+    if [[ -z "$CMD" ]]; then
+      continue
     fi
-    # Truncate output to avoid overly long messages
-    TRUNCATED_OUTPUT=$(echo "$CMD_OUTPUT" | tail -5 | head -c 500)
-    VALIDATION_FAILURES="${VALIDATION_FAILURES}Command '${CMD}' failed (exit ${CMD_EXIT}): ${TRUNCATED_OUTPUT}"
-  fi
-done
+
+    # Execute with 30s timeout
+    CMD_OUTPUT=""
+    CMD_EXIT=0
+    CMD_OUTPUT=$(cd "$PROJECT_ROOT" && timeout 30 bash -c "$CMD" 2>&1) || CMD_EXIT=$?
+
+    if [[ $CMD_EXIT -ne 0 ]]; then
+      VALIDATION_PASS=false
+      if [[ -n "$VALIDATION_FAILURES" ]]; then
+        VALIDATION_FAILURES="${VALIDATION_FAILURES}; "
+      fi
+      # Truncate output to avoid overly long messages
+      TRUNCATED_OUTPUT=$(echo "$CMD_OUTPUT" | tail -5 | head -c 500)
+      VALIDATION_FAILURES="${VALIDATION_FAILURES}Command '${CMD}' failed (exit ${CMD_EXIT}): ${TRUNCATED_OUTPUT}"
+    fi
+  done
+fi
 
 # ---------------------------------------------------------------------------
-# 11. Handle validation results
+# 10. Check completion promise — ONLY if validation passed
+#     (Moved AFTER validation — a false promise cannot short-circuit real validation)
 # ---------------------------------------------------------------------------
-ITERATION_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
 if [[ "$VALIDATION_PASS" == "true" ]]; then
-  # All validation commands passed — success!
+  if [[ -n "$TRANSCRIPT_PATH" ]] && [[ -f "$TRANSCRIPT_PATH" ]]; then
+    PROMISE_RESULT=$(node -e "
+      const fs = require('fs');
+      const state = JSON.parse(process.argv[1]);
+      const r = state.ralph;
+
+      if (!r.completionPromise) {
+        console.log('no_promise');
+        process.exit(0);
+      }
+
+      const transcriptPath = process.argv[2];
+      // Read last 50 lines of transcript
+      const lines = fs.readFileSync(transcriptPath, 'utf8').split('\n').filter(Boolean);
+      const tail = lines.slice(-50);
+
+      // Search for <promise>TEXT</promise> in assistant messages
+      for (const line of tail) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.role === 'assistant' && entry.message && entry.message.content) {
+            const texts = entry.message.content
+              .filter(c => c.type === 'text')
+              .map(c => c.text)
+              .join('\n');
+
+            // Extract promise tags — use a regex that handles multiline
+            const match = texts.match(/<promise>([\s\S]*?)<\/promise>/);
+            if (match) {
+              const promiseText = match[1].trim().replace(/\s+/g, ' ');
+              const expected = r.completionPromise.trim().replace(/\s+/g, ' ');
+              if (promiseText === expected) {
+                console.log('matched');
+                process.exit(0);
+              }
+            }
+          }
+        } catch(e) { /* skip unparseable lines */ }
+      }
+
+      console.log('not_matched');
+    " "$STATE_JSON" "$TRANSCRIPT_PATH" 2>/dev/null || echo "no_promise")
+
+    if [[ "$PROMISE_RESULT" == "matched" ]]; then
+      # Validation passed AND promise matched — mark completed
+      node -e "
+        const pluginRoot = process.argv[1];
+        const specPath = process.argv[2];
+        const { readStateFile, writeStateFile } = require(pluginRoot + '/scripts/state-file');
+        const state = readStateFile(specPath);
+        if (state && state.ralph) {
+          state.ralph.status = 'completed';
+          state.ralph.active = false;
+          state.ralph.finalResult = 'Validation passed and completion promise matched';
+          writeStateFile(specPath, state);
+        }
+      " "$PLUGIN_ROOT" "$SPEC_PATH" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
+      echo "Ralph loop: validation passed + completion promise matched. Loop finished." >&2
+      exit 0
+    fi
+  fi
+
+  # Validation passed but no promise match — still allow exit
+  # (All tasks done + all validation commands green = work is complete)
+  ITERATION_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   node -e "
     const pluginRoot = process.argv[1];
     const specPath = process.argv[2];
@@ -432,43 +456,47 @@ if [[ "$VALIDATION_PASS" == "true" ]]; then
   " "$PLUGIN_ROOT" "$SPEC_PATH" "$ITERATION_START" "$ITERATION_END" 2>/dev/null || echo "Ralph stop-hook: failed to update completion state" >&2
   echo "Ralph loop: all validation commands passed. Loop finished successfully." >&2
   exit 0
-else
-  # Validation failed — block exit and continue iterating
-  BLOCK_JSON=$(node -e "
-    const pluginRoot = process.argv[1];
-    const specPath = process.argv[2];
-    const iterStart = process.argv[3];
-    const iterEnd = process.argv[4];
-    const failures = process.argv[5];
-    const { updateRalphIteration } = require(pluginRoot + '/scripts/ralph-loop');
-    const { readStateFile } = require(pluginRoot + '/scripts/state-file');
-
-    try {
-      updateRalphIteration(specPath, {
-        startedAt: iterStart,
-        completedAt: iterEnd,
-        tasksCompleted: 0,
-        tasksFailed: [],
-        tasksStuck: [],
-        validationResult: 'fail',
-        validationSummary: failures
-      });
-    } catch(e) { process.stderr.write('Ralph stop-hook: iteration update failed: ' + e.message + '\n'); }
-
-    const state = readStateFile(specPath);
-    const r = state ? state.ralph : null;
-    const currentIter = r ? r.currentIteration : '?';
-    const maxIter = r ? r.maxIterations : '?';
-
-    const output = {
-      decision: 'block',
-      reason: 'Validation failed. Fix these issues and re-validate: ' + failures + '. Run /status for progress.',
-      systemMessage: 'Ralph Loop — Iteration ' + currentIter + '/' + maxIter + ' (validation failed)'
-    };
-
-    console.log(JSON.stringify(output));
-  " "$PLUGIN_ROOT" "$SPEC_PATH" "$ITERATION_START" "$ITERATION_END" "$VALIDATION_FAILURES" 2>/dev/null) || { echo "Ralph stop-hook: failed to build block response" >&2; exit 0; }
-
-  echo "$BLOCK_JSON"
-  exit 0
 fi
+
+# ---------------------------------------------------------------------------
+# 11. Validation failed — block exit and continue iterating
+# ---------------------------------------------------------------------------
+ITERATION_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+BLOCK_JSON=$(node -e "
+  const pluginRoot = process.argv[1];
+  const specPath = process.argv[2];
+  const iterStart = process.argv[3];
+  const iterEnd = process.argv[4];
+  const failures = process.argv[5];
+  const { updateRalphIteration } = require(pluginRoot + '/scripts/ralph-loop');
+  const { readStateFile } = require(pluginRoot + '/scripts/state-file');
+
+  try {
+    updateRalphIteration(specPath, {
+      startedAt: iterStart,
+      completedAt: iterEnd,
+      tasksCompleted: 0,
+      tasksFailed: [],
+      tasksStuck: [],
+      validationResult: 'fail',
+      validationSummary: failures
+    });
+  } catch(e) { process.stderr.write('Ralph stop-hook: iteration update failed: ' + e.message + '\n'); }
+
+  const state = readStateFile(specPath);
+  const r = state ? state.ralph : null;
+  const currentIter = r ? r.currentIteration : '?';
+  const maxIter = r ? r.maxIterations : '?';
+
+  const output = {
+    decision: 'block',
+    reason: 'Validation failed. Fix these issues and re-validate: ' + failures + '. Run /status for progress.',
+    systemMessage: 'Ralph Loop — Iteration ' + currentIter + '/' + maxIter + ' (validation failed). Do NOT emit <promise>DONE</promise> until all validation commands pass.'
+  };
+
+  console.log(JSON.stringify(output));
+" "$PLUGIN_ROOT" "$SPEC_PATH" "$ITERATION_START" "$ITERATION_END" "$VALIDATION_FAILURES" 2>/dev/null) || { echo "Ralph stop-hook: failed to build block response" >&2; exit 0; }
+
+echo "$BLOCK_JSON"
+exit 0
